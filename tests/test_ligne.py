@@ -155,6 +155,134 @@ def test_croisement_diagonal_hors_segment_non_compte():
     assert l.a_traverse((90.0, 550.0), (110.0, 900.0)) is False
 
 
+def test_sens_traversee_est_oppose_a_la_normale_avec_sens_positif():
+    """Invariant vérifié par 200 balayages : le sens compté est -n quand sens=+1."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), sens=1)
+    nx, ny = l.vecteur_normal()
+    sx, sy = l.sens_traversee
+    assert (sx, sy) == pytest.approx((-nx, -ny))
+    assert sx * sx + sy * sy == pytest.approx(1.0)
+
+
+def test_sens_traversee_suit_le_sens_choisi():
+    """``sens=-1`` inverse aussi le sens compté, et le vecteur reste unitaire."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), sens=-1)
+    nx, ny = l.vecteur_normal()
+    sx, sy = l.sens_traversee
+    assert (sx, sy) == pytest.approx((-nx, -ny))
+    assert sx * sx + sy * sy == pytest.approx(1.0)
+    # Concretement : avec sens=-1, c'est la marche vers -x qui est comptee.
+    assert l.a_traverse((150.0, 500.0), (50.0, 500.0)) is True
+    assert l.a_traverse((50.0, 500.0), (150.0, 500.0)) is False
+
+
+def _poteaux_de_fleche(l, sortie):
+    """Etendue des pixels verts de part et d'autre de la ligne x=100.
+
+    La ligne tracee elle-meme fait ~1 px de depassement de chaque cote ; la
+    fleche doit en faire ~epaisseur/2 * 1.6 du seul cote ou elle pointe.
+    """
+    vert = np.all(sortie == np.array([80, 220, 80]), axis=-1)
+    ys, xs = np.where(vert)
+    assert len(xs) > 0, "la fleche doit etre dessinee en vert"
+    return xs.max() - 100.0, 100.0 - xs.min()
+
+
+def test_fleche_pointe_dans_le_sens_reellement_compte():
+    """La fleche doit indiquer le cote que ``a_traverse`` compte.
+
+    Le test qui casse le mutant : la fleche doit CHOIR du cote compte, pas
+    seulement etre dessinee quelque part. On mesure donc la depassement de la
+    ligne de chaque cote : 24 px du cote de la fleche (demi * 1.6), ~1 px de
+    l'autre (l'epaisseur du trait lui-meme).
+    """
+    for sens in (1, -1):
+        l = Ligne(p1=(100.0, 0.0), p2=(100.0, 400.0), sens=sens, epaisseur=30)
+        sortie = l.dessiner(np.zeros((400, 400, 3), dtype=np.uint8))
+        sx, _ = l.sens_traversee
+        vers_plus_x, vers_moins_x = _poteaux_de_fleche(l, sortie)
+        attendu = l.epaisseur / 2.0 * 1.6  # 24 px
+        if sx > 0:
+            assert vers_plus_x >= attendu - 2, f"sens={sens}: fleche a gauche de la ligne"
+            assert vers_moins_x <= 3, f"sens={sens}: debord a droite alors que la fleche pointe a droite"
+        else:
+            assert vers_moins_x >= attendu - 2, f"sens={sens}: fleche a droite de la ligne"
+            assert vers_plus_x <= 3, f"sens={sens}: debord a gauche alors que la fleche pointe a gauche"
+
+
+def test_fleche_pointe_du_cote_arrivee():
+    """Quel que soit ``sens``, la pointe est du cote d'arrivee.
+
+    Vocabulaire unique du module : cote de depart = coordonnee positive,
+    cote d'arrivee = coordonnee negative. C'est ce que retient
+    ``a_traverse`` (« cote depart > 0 et cote arrive <= 0 »).
+    """
+    for sens in (1, -1):
+        l = Ligne(p1=(100.0, 0.0), p2=(100.0, 400.0), sens=sens, epaisseur=30)
+        sortie = l.dessiner(np.zeros((400, 400, 3), dtype=np.uint8))
+        vert = np.all(sortie == np.array([80, 220, 80]), axis=-1)
+        ys, xs = np.where(vert)
+        sx, _ = l.sens_traversee
+        pointe = (float(xs.max() if sx > 0 else xs.min()), 200.0)
+        assert l.point_du_cote(pointe) == -1, (
+            f"sens={sens}: la pointe doit etre du cote d'arrivee, elle est "
+            f"du cote {l.point_du_cote(pointe)}"
+        )
+
+
+def test_aller_retour_compte_une_seule_fois():
+    """Ce que le commentaire de convention promet, et qui est vrai."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    assert l.a_traverse((50.0, 500.0), (150.0, 500.0)) is True
+    assert l.a_traverse((150.0, 500.0), (50.0, 500.0)) is False
+
+
+def test_tremblement_autour_de_la_ligne_est_bien_compte():
+    """Recalage du commentaire de convention : ce qu'il promettait etait faux.
+
+    Mesure faite avant de reecrire le commentaire : une personne immobile a
+    1 px de la ligne (alternance 99/100) produit 14 traversees retenues en 29
+    frames. ``a_traverse`` ne voit qu'une suite de coordonnees positives
+    decroissant vers 0 : il ne peut pas distinguer un tremblement d'une
+    personne qui s'eloigne. C'est a la tache 5 (anti-rebond) de ne pas
+    recompter la meme personne, pas a cette geometrie.
+    """
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    x, total = 99.0, 0
+    for i in range(29):
+        suivant = 100.0 if i % 2 else 99.0
+        total += l.a_traverse((x, 500.0), (suivant, 500.0))
+        x = suivant
+    assert total > 1, "le commentaire promettait 0 comptage : ce serait faux"
+
+
+def test_epaisseur_invalide_refusee():
+    with pytest.raises(ValueError):
+        Ligne(p1=(10.0, 10.0), p2=(10.0, 100.0), epaisseur=0)
+
+
+def test_hysteresis_negatif_refuse():
+    with pytest.raises(ValueError):
+        Ligne(p1=(10.0, 10.0), p2=(10.0, 100.0), hysteresis=-1)
+
+
+def test_bande_ne_masque_pas_la_video():
+    """La bande doit etre translucide : sinon elle cache les gens comptes."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 400.0), epaisseur=60, sens=1)
+    # Fond blanc, avec une rayure noire qui passe SOUS la bande : c'est le
+    # contraste sous la bande qui compte, pas sa couleur absolue.
+    img = np.full((400, 400, 3), 255, dtype=np.uint8)
+    img[:, 118] = 0
+    sortie = l.dessiner(img)
+    assert sortie.shape == img.shape, "la sortie doit garder la taille de l'entree"
+    sous_noir = sortie[200, 118].mean()
+    sous_blanc = sortie[200, 82].mean()
+    # Opaque (fillPoly seul) : les deux vaudraient 40, contraste nul.
+    assert sous_blanc > 150, f"le blanc sous la bande est ecrase : {sous_blanc}"
+    assert sous_noir < 90, f"le contraste sous la bande est perdu : {sous_noir}"
+    assert sous_blanc - sous_noir > 100, "la bande doit rester translucide"
+
+
 def test_dessiner_ne_crash_pas_et_ne_mute_pas():
     img = np.zeros((200, 200, 3), dtype=np.uint8)
     l = ligne_haut_vers_bas()

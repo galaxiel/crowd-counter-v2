@@ -15,9 +15,24 @@ import numpy as np
 class Ligne:
     """Ligne orientée définissant une zone de franchissement.
 
-    La ligne passe par ``p1`` et ``p2``. ``sens`` vaut ``+1`` : on ne compte
-    que les passages dans le sens de la normale, ``-1`` : que les passages
-    inverses.
+    La ligne passe par ``p1`` et ``p2``. ``sens`` désigne le **côté
+    retenu** : ``+1`` on ne compte que les personnes qui vont du côté de
+    départ vers le côté d'arrivée, ``-1`` que les passages inverses.
+
+    Deux vecteurs portent donc des noms distincts, et il ne faut pas les
+    confondre :
+
+    - ``vecteur_normal()`` / ``_n`` : la normale. Elle sert a mesurer la
+      position signée d'un point (``coordonnee_projetee``) et a orienter les
+      deux côtés de la bande. Son signe n'est PAS le sens de comptage.
+    - ``sens_traversee`` : la direction de marche réellement comptée, soit
+      toujours ``-_n``. C'est elle que la flèche de ``dessiner()`` doit
+      montrer à l'opérateur.
+
+    Le vocabulaire des côtés est unique dans ce module et vient du
+    comportement testé de ``a_traverse`` : **côté de départ = coordonnée
+    positive**, **côté d'arrivée = coordonnée négative**. Ce qui est donc
+    vrai quel que soit ``sens``.
     """
 
     def __init__(
@@ -51,14 +66,24 @@ class Ligne:
         # Direction le long de la ligne, puis normale (perpendiculaire).
         self._d = ((p2[0] - p1[0]) / longueur, (p2[1] - p1[1]) / longueur)
         self._n = (-self._d[1], self._d[0])
-        # La normale est orientée dans le sens de traversée retenu.
+        # Le signe de la normale estChoisi par `sens`, mais ce n'est PAS pour
+        # autant le sens de comptage : il sert a distinguer les deux cotes.
         if self.sens < 0:
             self._n = (-self._n[0], -self._n[1])
+        # Direction effectivement comptée. a_traverse retient le passage
+        # quand la coordonnée sur _n décroît : le sens compté est donc
+        # opposé à _n quand sens=+1. Exposer cet invariant évite que la
+        # flèche et l'interface se trompent de sens.
+        self.sens_traversee = (-self._n[0], -self._n[1])
 
     # -- Géométrie -------------------------------------------------------
 
     def vecteur_normal(self) -> tuple[float, float]:
-        """Normale unitaire, orientée dans le sens de traversée retenu."""
+        """Normale unitaire : sert a situer les deux côtés, pas a dire le sens compté.
+
+        Pour la direction de marche à montrer à l'opérateur, lire
+        ``sens_traversee`` (``-_n``).
+        """
         return self._n
 
     def coordonnee_projetee(self, p: tuple[float, float]) -> float:
@@ -85,14 +110,17 @@ class Ligne:
         return -self.epaisseur / 2.0 <= t <= longueur + self.epaisseur / 2.0
 
     def point_du_cote(self, p: tuple[float, float]) -> int:
-        """``+1`` cote de la normale POSITIVE, ``-1`` cote negatif, ``0`` dans la bande.
+        """Le côté de ``p`` : ``+1`` départ, ``-1`` arrivée, ``0`` dans la bande.
 
-        Ces noms de cotes sont relatifs a la normale, qui est elle-meme
-        orientee par ``sens`` : « +1 » designe donc le cote d'arrivee quand
-        ``sens = +1``, et le cote de depart quand ``sens = -1``. La regle
-        seule, sans interpretation : ``+1`` si ``coordonnee_projetee(p) >
-        epaisseur / 2``, ``-1`` si elle est ``< -epaisseur / 2``, ``0``
-        entre les deux.
+        Noms pris dans ``a_traverse``, qui est le comportement réel et testé :
+        **côté de départ = coordonnée positive**, **côté d'arrivée =
+        coordonnée négative**. Ces noms ne dépendent donc PAS de ``sens`` —
+        avec ``sens=+1`` comme avec ``sens=-1``, ``+1`` désigne le côté de
+        départ. Ce qui change avec ``sens``, c'est le côté retenu.
+
+        La règle seule, sans interprétation : ``+1`` si
+        ``coordonnee_projetee(p) > epaisseur / 2``, ``-1`` si elle est
+        ``< -epaisseur / 2``, ``0`` entre les deux.
         """
         c = self.coordonnee_projetee(p)
         if c > self.epaisseur / 2.0:
@@ -104,11 +132,14 @@ class Ligne:
     def a_traverse(self, avant: tuple[float, float], apres: tuple[float, float]) -> bool:
         """Le passage de ``avant`` a ``apres`` est-il un franchissement retenu ?
 
-        Une traversee est un changement de cote de la ligne, ET le croisement
-        doit avoir lieu le long du segment dessine. On interpole le point
-        exact de croisement : peu importe la vitesse de la personne, qu'elle
-        traverse lentement ou qu'elle saute par-dessus la bande, la reponse
-        est la meme.
+        Retenu signifie : départ du côté de départ (coordonnée positive) vers
+        le côté d'arrivée (coordonnée négative) le long du segment dessine.
+        La direction de marche ainsi comptée est ``sens_traversee``, soit
+        l'opposé de la normale : c'est donc ``-_n``, pas ``_n``.
+
+        On interpole le point exact de croisement : peu importe la vitesse de
+        la personne, qu'elle traverse lentement ou qu'elle saute par-dessus la
+        bande, la reponse est la meme.
         """
         c_avant = self.coordonnee_projetee(avant)
         c_apres = self.coordonnee_projetee(apres)
@@ -159,10 +190,14 @@ class Ligne:
         cv2.polylines(sortie, [quad], True, jaune, 1, cv2.LINE_AA)
         cv2.line(sortie, p1, p2, vert, 2, cv2.LINE_AA)
 
-        # Flèche de sens, au milieu du segment.
+        # Flèche de sens, au milieu du segment. Elle montre le sens
+        # RÉELLEMENT compté, donc `sens_traversee` (= -_n) et non `_n` :
+        # c'est l'affordance qui dit à l'opérateur de quel côté on compte.
+        # Utiliser `_n` ici afficherait la flèche du mauvais côté.
+        sx, sy = self.sens_traversee
         mx = (self.p1[0] + self.p2[0]) / 2.0
         my = (self.p1[1] + self.p2[1]) / 2.0
-        pointe = (int(mx + nx * demi * 1.6), int(my + ny * demi * 1.6))
+        pointe = (int(mx + sx * demi * 1.6), int(my + sy * demi * 1.6))
         base = (int(mx), int(my))
         cv2.arrowedLine(sortie, base, pointe, vert, 3, cv2.LINE_AA, tipLength=0.4)
         return sortie
