@@ -48,3 +48,18 @@ def test_frame_result_se_construit_par_mots_cles():
     assert r.timestamp_s == 0.35
     assert r.detections == [] and r.tracks == [] and r.evenements == []
     assert r.total == 0 and r.presents == 0
+
+
+def test_import_etoile_du_paquet_ne_leve_pas():
+    """__all__ ne doit lister que des modules réellement présents.
+
+    Lister les briques futures ('ligne', 'detecteur', ...) faisait échouer
+    `from compteur import *` en AttributeError jusqu'à la tâche 7.
+    """
+    import compteur
+
+    namespace = {}
+    exec("from compteur import *", namespace)  # noqa: S102
+    for nom in compteur.__all__:
+        assert nom in namespace
+        assert hasattr(compteur, nom), f"{nom} est dans __all__ mais pas un sous-module"

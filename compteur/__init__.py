@@ -4,4 +4,4 @@ Ce paquet est volontairement utilisable sans écran : les tests, la comparaison
 de modèles et une future API web l'importent tous directement.
 """
 
-__all__ = ["types", "config", "ligne", "detecteur", "tracker", "compteur", "rapport"]
+__all__ = ["types", "config"]
