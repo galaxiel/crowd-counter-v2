@@ -197,7 +197,13 @@ class Ligne:
             dtype=np.int32,
         )
         cv2 = _cv2()
-        cv2.fillPoly(sortie, [quad], (40, 40, 40))
+        # La bande est un APERCU de la zone de comptage, pas un voile : peinte
+        # opaque elle masquerait exactement les gens qu'on cherche a compter
+        # (sur fond blanc, un pixel sous la bande tombait a 40 au lieu de 255).
+        # On la compose donc en translucide ; l'original reste lisible dessous.
+        bande = sortie.copy()
+        cv2.fillPoly(bande, [quad], (40, 40, 40))
+        sortie = cv2.addWeighted(sortie, 0.65, bande, 0.35, 0)
         cv2.polylines(sortie, [quad], True, jaune, 1, cv2.LINE_AA)
         cv2.line(sortie, p1, p2, vert, 2, cv2.LINE_AA)
 

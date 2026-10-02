@@ -275,8 +275,11 @@ def test_bande_ne_masque_pas_la_video():
     img[:, 118] = 0
     sortie = l.dessiner(img)
     assert sortie.shape == img.shape, "la sortie doit garder la taille de l'entree"
-    sous_noir = sortie[200, 118].mean()
-    sous_blanc = sortie[200, 82].mean()
+    # On echantillonne en y=150 : la fleche est tracee en y=200 (milieu du
+    # segment) et le trait vert couvre y=199..201. En y=200 on mesurerait la
+    # couleur du trait, pas celle de la bande.
+    sous_noir = sortie[150, 118].mean()
+    sous_blanc = sortie[150, 82].mean()
     # Opaque (fillPoly seul) : les deux vaudraient 40, contraste nul.
     assert sous_blanc > 150, f"le blanc sous la bande est ecrase : {sous_blanc}"
     assert sous_noir < 90, f"le contraste sous la bande est perdu : {sous_noir}"
