@@ -531,12 +531,12 @@ def ligne_haut_vers_bas(**kw):
     return Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), **kw)
 
 
-def test_coordonnee_projetée_nulle_sur_la_ligne():
+def test_coordonnee_projetee_nulle_sur_la_ligne():
     l = ligne_haut_vers_bas()
     assert l.coordonnee_projetee((100.0, 500.0)) == pytest.approx(0.0, abs=1e-6)
 
 
-def test_coordonnee_signee_change_de_côté():
+def test_coordonnee_signee_change_de_cote():
     l = ligne_haut_vers_bas()
     a = l.coordonnee_projetee((50.0, 500.0))
     b = l.coordonnee_projetee((150.0, 500.0))
