@@ -22,3 +22,4 @@ config/local_*.json
 build/
 dist/
 *.spec
+.pytest_cache/

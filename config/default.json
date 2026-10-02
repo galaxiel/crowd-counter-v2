@@ -1,0 +1,14 @@
+{
+  "modele": "yolov8n-head.pt",
+  "seuil_confiance": 0.25,
+  "taille_min_px": 20,
+  "classes_retenues": null,
+  "taille_entree": 640,
+  "frames_confirmation": 3,
+  "survie_max": 30,
+  "seuil_matching": 0.5,
+  "ligne": null,
+  "epaisseur_bande": 30,
+  "sens": 1,
+  "frames_hysteresis": 2
+}
