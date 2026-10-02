@@ -35,7 +35,10 @@ supervision (ByteTrack), PySide6, opencv-python, numpy, Pillow, pytest.
 - Tests avec pytest. Chaque module a ses tests. TDD sur chaque tâche.
 - Commits fréquents : un commit par étape franchie, message au format
   conventionnel.
-- Interface en français (libellés, messages), code et identifiants en anglais.
+- Interface en français (libellés, messages d'erreur). Le code et les
+  identifiants internes sont aussi en français, sans accents (ASCII) : pytest
+  collecte de façon fiable en ASCII sous Windows, et un accent dans un `def`
+  casse la collecte selon l'encodage du terminal.
 - Chaque tâche se termine par un test qui passe et un commit.
 
 ---
@@ -105,6 +108,7 @@ crowd-counter-v2/
 - Créer : `compteur/config.py`
 - Créer : `config/default.json`
 - Créer : `requirements.txt`
+- Créer : `tests/conftest.py`
 - Créer : `tests/test_isolation_ui.py`
 - Créer : `tests/test_config.py`
 - Créer : `tests/test_types.py`
@@ -135,8 +139,8 @@ import pathlib
 
 import pytest
 
-LIVRABLES = list(pathlib.Path("compteur").rglob("*.py"))
-MODULES_INTERDITS = {"PySide6", "PySide6.QtCore", "tkinter", "PyQt5", "PyQt6", "wx"}
+LIVRABLES = list((pathlib.Path(__file__).resolve().parent.parent / "compteur").rglob("*.py"))
+MODULES_INTERDITS = {"PySide6", "PyQt5", "PyQt6", "tkinter", "wx"}
 
 
 def test_le_paquet_compteur_existe():
@@ -145,17 +149,41 @@ def test_le_paquet_compteur_existe():
     )
 
 
-@pytest.mark.parametrize("chemin", LIVRABLES, ids=lambda p: p.name)
-def test_aucun_import_graphique_dans_compteur(chemin):
-    arbre = ast.parse(chemin.read_text(encoding="utf-8"))
-    importes = set()
+def imports_interdits(source: str) -> set[str]:
+    """Modules graphiques importés par ``source``. Match par préfixe.
+
+    Le préfixe est indispensable : ``from PySide6.QtWidgets import QApplication``
+    donne ``noeud.module == "PySide6.QtWidgets"``, qui ne correspond
+    exactement à aucune racine — c'est la forme idiomatique de tous les
+    imports Qt, donc une correspondance exacte ne garantit rien.
+    """
+    arbre = ast.parse(source)
+    importes: set[str] = set()
     for noeud in ast.walk(arbre):
         if isinstance(noeud, ast.Import):
             importes.update(a.name for a in noeud.names)
         elif isinstance(noeud, ast.ImportFrom) and noeud.module:
             importes.add(noeud.module)
-    interdites = importes & MODULES_INTERDITS
+    return {
+        i for i in importes
+        if any(i == m or i.startswith(m + ".") for m in MODULES_INTERDITS)
+    }
+
+
+@pytest.mark.parametrize("chemin", LIVRABLES, ids=lambda p: p.name)
+def test_aucun_import_graphique_dans_compteur(chemin):
+    interdites = imports_interdits(chemin.read_text(encoding="utf-8"))
     assert not interdites, f"{chemin} importe {interdites}, interdit dans compteur/"
+
+
+def test_detecte_import_qt_profond(tmp_path):
+    """Preuve de non-vacuité : la forme idiomatique doit être attrapée."""
+    source = "from PySide6.QtWidgets import QApplication\n"
+    assert imports_interdits(source) == {"PySide6.QtWidgets"}
+
+
+def test_laisse_passer_les_modules_sans_risque():
+    assert imports_interdits("import numpy\nimport json\n") == set()
 ```
 
 - [ ] **Étape 2 : Lancer le test, vérifier qu'il échoue**
@@ -164,7 +192,9 @@ def test_aucun_import_graphique_dans_compteur(chemin):
 python -m pytest tests/test_isolation_ui.py -v
 ```
 
-Attendu : ÉCHEC, `FileNotFoundError` sur `compteur/__init__.py`.
+Attendu : ÉCHEC, `AssertionError` sur `test_le_paquet_compteur_existe` — le
+paquet n'existe pas encore. C'est bien le comportement voulu : l'étape 2 doit
+voir le test échouer sur la ressource manquante.
 
 - [ ] **Étape 3 : Créer le paquet et les types**
 
@@ -177,7 +207,7 @@ Ce paquet est volontairement utilisable sans écran : les tests, la comparaison
 de modèles et une future API web l'importent tous directement.
 """
 
-__all__ = ["types", "config", "ligne", "detecteur", "tracker", "compteur", "rapport"]
+__all__ = ["types", "config"]
 ```
 
 Créer `compteur/types.py` :
@@ -260,7 +290,6 @@ class FrameResult:
     presents: int = 0
     frame_index: int = 0
     timestamp_s: float = 0.0
-    indice: int = 0
     evenements: list[Evenement] = field(default_factory=list)
 
 
@@ -331,13 +360,55 @@ def test_ligne_none_est_acceptee():
     assert c.depuis_dict(c.vers_dict()).ligne is None
 
 
+def test_ligne_non_nulle_fait_laller_retour_en_liste():
+    c = Config(modele="x.pt", ligne=(10.0, 20.0, 30.0, 40.0))
+    d = c.vers_dict()
+    assert d["ligne"] == [10.0, 20.0, 30.0, 40.0], "le JSON doit produire une liste"
+    retour = Config.depuis_dict(d)
+    assert retour.ligne == (10.0, 20.0, 30.0, 40.0), "le retour doit être un tuple"
+
+
+def test_classes_retenues_fait_laller_retour():
+    c = Config(modele="x.pt", classes_retenues=[0, 2])
+    assert Config.depuis_dict(c.vers_dict()).classes_retenues == [0, 2]
+
+
+def test_cle_inconnue_refusee():
+    with pytest.raises(ValueError):
+        Config.depuis_dict({"modele": "x.pt", "parametre_qui_nexiste_pas": 1})
+
+
+def test_defauts_lu_le_fichier_versionne():
+    assert Config.defauts().modele == json.loads(
+        chemin_defaut_config().read_text(encoding="utf-8")
+    )["modele"]
+
+
+def test_valeurs_par_defaut_ne_divergent_pas_du_fichier():
+    """Le dataclass et config/default.json doivent rester synchronisés."""
+    assert Config() == Config.depuis_fichier(chemin_defaut_config())
+
+
+def test_vers_fichier_cree_les_repertoires_manquants(tmp_path):
+    p = tmp_path / "sous" / "dossier" / "c.json"
+    Config(modele="x.pt").vers_fichier(p)
+    assert p.exists(), "vers_fichier doit créer l'arborescence manquante"
+
+
 def test_config_par_defaut_existe():
     assert chemin_defaut_config().exists(), "config/default.json doit être versionné"
 
 
 def test_config_par_defaut_est_valide():
+    """Vérifie que le fichier versionné est chargeable, rien de plus.
+
+    Le module ne fait PAS de validation de type : passer un int à la place d'un
+    float n lève rien. Ce test garantit seulement que le fichier livré est
+    syntaxiquement et structurellement correct.
+    """
     d = json.loads(chemin_defaut_config().read_text(encoding="utf-8"))
-    Config.depuis_dict(d)  # lève si une clé est inconnue ou mal typée
+    Config.depuis_dict(d)  # lève si une clé est inconnue ou manquante
+    assert set(d) == {f.name for f in __import__("dataclasses").fields(Config)}
 ```
 
 - [ ] **Étape 6 : Lancer les tests, vérifier qu'ils échouent**
@@ -356,8 +427,11 @@ Attendu : ÉCHEC sur l'import (`ModuleNotFoundError: No module named 'compteur.c
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, fields
+
+log = logging.getLogger(__name__)
 
 RACINE = pathlib.Path(__file__).resolve().parent.parent
 
@@ -418,10 +492,21 @@ class Config:
 
     @classmethod
     def defauts(cls) -> "Config":
-        """Valeurs par défaut issues du fichier versionné."""
+        """Valeurs par défaut issues du fichier versionné.
+
+        Le repli silencieux est journalisé : sous PyInstaller ou en
+        installation wheel, ``config/default.json`` peut manquer du bundle, et
+        l'application démarrerait alors avec des valeurs qui ne sont plus la
+        source de vérité sans que personne ne le sache.
+        """
         p = chemin_defaut_config()
         if p.exists():
             return cls.depuis_fichier(p)
+        log.warning(
+            "config/default.json introuvable (%s) : repli sur les valeurs "
+            "codées en dur, qui peuvent diverger du fichier.",
+            p,
+        )
         return cls()
 ```
 
@@ -459,6 +544,23 @@ PySide6>=6.7
 scipy>=1.13
 pytest>=8.0
 pyinstaller>=6.10
+```
+
+Créer `tests/conftest.py` :
+
+```python
+"""Ancre la suite sur la racine du dépôt, quel que soit le répertoire courant.
+
+Sans cela, lancer pytest depuis ailleurs (C:\\Users\\jeff, ou le dossier
+dist/ de PyInstaller) échoue en ModuleNotFoundError sur le paquet compteur/.
+"""
+
+import pathlib
+import sys
+
+RACINE = pathlib.Path(__file__).resolve().parent.parent
+if str(RACINE) not in sys.path:
+    sys.path.insert(0, str(RACINE))
 ```
 
 - [ ] **Étape 9 : Lancer tous les tests, vérifier qu'ils passent**
