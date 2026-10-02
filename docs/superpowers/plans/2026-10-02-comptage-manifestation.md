@@ -151,7 +151,7 @@ def test_aucun_import_graphique_dans_compteur(chemin):
     importes = set()
     for noeud in ast.walk(arbre):
         if isinstance(noeud, ast.Import):
-            importes.update(a.nom for a in noeud.names)
+            importes.update(a.name for a in noeud.names)
         elif isinstance(noeud, ast.ImportFrom) and noeud.module:
             importes.add(noeud.module)
     interdites = importes & MODULES_INTERDITS
