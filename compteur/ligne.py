@@ -92,22 +92,35 @@ class Ligne:
         return 0
 
     def a_traverse(self, avant: tuple[float, float], apres: tuple[float, float]) -> bool:
-        """Le passage de ``avant`` à ``apres`` est-il un franchissement retenu ?
+        """Le passage de ``avant`` a ``apres`` est-il un franchissement retenu ?
 
-        Trois conditions cumulatives : au moins un des deux points est dans la
-        zone de la ligne, le côté a changé, et le déplacement sur la normale
-        dépasse la demi-bande (on exige de traverser toute la bande, pas
-        d'effleurer).
+        Une traversee est un changement de cote de la ligne, ET le croisement
+        doit avoir lieu le long du segment dessine. On interpole le point
+        exact de croisement : peu importe la vitesse de la personne, qu'elle
+        traverse lentement ou qu'elle saute par-dessus la bande, la reponse
+        est la meme.
         """
-        if not self.contient(avant) and not self.contient(apres):
-            return False
         c_avant = self.coordonnee_projetee(avant)
         c_apres = self.coordonnee_projetee(apres)
-        if c_avant * c_apres > 0:
-            return False  # pas de changement de côté
-        if abs(c_apres - c_avant) < self.epaisseur:
-            return False  # simple tremblement, pas une traversée
-        return True
+        # Intervalle semi-ouvert : la ligne (c == 0) appartient au cote
+        # d'arrivee. Une traversee est donc « cote depart > 0 et
+        # cote arrive <= 0 ». Ce choix compte exactement une fois une
+        # personne qui pose le pied pile sur la ligne, la ou une comparaison
+        # stricte la ferait disparaitre, et deux fois si on ouvrait les deux
+        # bouts. Le cote depart est strict : un simple tremblement autour de
+        # la ligne sans franchissement n'est pas compte.
+        if not (c_avant > 0 >= c_apres):
+            return False
+
+        # Position du croisement, interpolee entre les deux points.
+        t = c_avant / (c_avant - c_apres)
+        croisement = (
+            avant[0] + (apres[0] - avant[0]) * t,
+            avant[1] + (apres[1] - avant[1]) * t,
+        )
+        s = self.parametre_along(croisement)
+        longueur = math.hypot(self.p2[0] - self.p1[0], self.p2[1] - self.p1[1])
+        return -self.epaisseur / 2.0 <= s <= longueur + self.epaisseur / 2.0
 
     # -- Rendu -----------------------------------------------------------
 

@@ -62,6 +62,65 @@ def test_sens_invalide_refuse():
         ligne_haut_vers_bas(sens=0)
 
 
+def test_traversee_complete_est_comptee():
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    assert l.a_traverse((50.0, 500.0), (150.0, 500.0)) is True
+
+
+def test_traversee_lente_comptee():
+    """Une personne a 5 px/frame traverse la bande en plusieurs frames."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    # 5 px de deplacement, mais un pas qui franchit vraiment x=100.
+    assert l.a_traverse((98.0, 500.0), (103.0, 500.0)) is True
+
+
+def test_pas_de_cote_a_cote_n_est_pas_une_traversee():
+    """88 -> 93 : 5 px, mais les deux points restent du meme cote de x=100."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    assert l.a_traverse((88.0, 500.0), (93.0, 500.0)) is False
+
+
+def test_pied_pose_pile_sur_la_ligne_compte_une_seule_fois():
+    """Un pas dont un extremite tombe exactement sur la ligne est retenu."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    assert l.coordonnee_projetee((100.0, 500.0)) == pytest.approx(0.0, abs=1e-6)
+    assert l.a_traverse((95.0, 500.0), (100.0, 500.0)) is True
+    # le pas suivant repart du meme point, cote oppose : pas de second compte.
+    assert l.a_traverse((100.0, 500.0), (105.0, 500.0)) is False
+
+
+def test_ballon_rebondissant_dans_la_bande_non_compte():
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    assert l.a_traverse((88.0, 500.0), (85.0, 500.0)) is False
+
+
+def test_meme_cote_non_compte():
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    assert l.a_traverse((50.0, 500.0), (80.0, 500.0)) is False
+
+
+def test_croisement_avant_le_debut_du_segment_non_compte():
+    """Le croisement est sur la meme verticale mais hors du segment dessine."""
+    l = Ligne(p1=(500.0, 500.0), p2=(500.0, 600.0), epaisseur=30, sens=1)
+    assert l.a_traverse((450.0, 100.0), (550.0, 100.0)) is False
+
+
+def test_croisement_apres_la_fin_du_segment_non_compte():
+    l = Ligne(p1=(500.0, 500.0), p2=(500.0, 600.0), epaisseur=30, sens=1)
+    assert l.a_traverse((450.0, 2000.0), (550.0, 2000.0)) is False
+
+
+def test_bilan_de_balayage_lent():
+    """200 frames de marche a 5 px/frame doivent produire exactement 1 traversee."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), epaisseur=30, sens=1)
+    x, total = 40.0, 0
+    for _ in range(200):
+        if l.a_traverse((x, 500.0), (x + 5.0, 500.0)):
+            total += 1
+        x += 5.0
+    assert total == 1, "une marche continue ne doit produire qu'un seul comptage"
+
+
 def test_dessiner_ne_crash_pas_et_ne_mute_pas():
     img = np.zeros((200, 200, 3), dtype=np.uint8)
     l = ligne_haut_vers_bas()
