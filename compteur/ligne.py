@@ -44,6 +44,8 @@ class Ligne:
         self.p2 = p2
         self.epaisseur = int(epaisseur)
         self.sens = int(sens)
+        # Valide et expose pour la tache 5 (anti-rebond du comptage) qui le lit
+        # via ligne.hysteresis ; la geometrie de ce module ne s'en sert pas.
         self.hysteresis = int(hysteresis)
 
         # Direction le long de la ligne, puis normale (perpendiculaire).
@@ -83,7 +85,15 @@ class Ligne:
         return -self.epaisseur / 2.0 <= t <= longueur + self.epaisseur / 2.0
 
     def point_du_cote(self, p: tuple[float, float]) -> int:
-        """``+1`` côté d'arrivée, ``-1`` côté de départ, ``0`` dans la bande."""
+        """``+1`` cote de la normale POSITIVE, ``-1`` cote negatif, ``0`` dans la bande.
+
+        Ces noms de cotes sont relatifs a la normale, qui est elle-meme
+        orientee par ``sens`` : « +1 » designe donc le cote d'arrivee quand
+        ``sens = +1``, et le cote de depart quand ``sens = -1``. La regle
+        seule, sans interpretation : ``+1`` si ``coordonnee_projetee(p) >
+        epaisseur / 2``, ``-1`` si elle est ``< -epaisseur / 2``, ``0``
+        entre les deux.
+        """
         c = self.coordonnee_projetee(p)
         if c > self.epaisseur / 2.0:
             return 1

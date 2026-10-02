@@ -121,6 +121,19 @@ def test_bilan_de_balayage_lent():
     assert total == 1, "une marche continue ne doit produire qu'un seul comptage"
 
 
+def test_sens_inverse_inverse_la_traversee():
+    """Le meme passage est compte avec sens=+1 et refuse avec sens=-1."""
+    avant, apres = (50.0, 500.0), (150.0, 500.0)
+    assert Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), sens=1).a_traverse(avant, apres) is True
+    assert Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), sens=-1).a_traverse(avant, apres) is False
+
+
+def test_hysteresis_est_expose():
+    """La tache 5 lit ligne.hysteresis : l'attribut doit rester disponible."""
+    l = Ligne(p1=(100.0, 0.0), p2=(100.0, 1000.0), hysteresis=4)
+    assert l.hysteresis == 4
+
+
 def test_dessiner_ne_crash_pas_et_ne_mute_pas():
     img = np.zeros((200, 200, 3), dtype=np.uint8)
     l = ligne_haut_vers_bas()
