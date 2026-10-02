@@ -148,8 +148,19 @@ class Ligne:
         # cote arrive <= 0 ». Ce choix compte exactement une fois une
         # personne qui pose le pied pile sur la ligne, la ou une comparaison
         # stricte la ferait disparaitre, et deux fois si on ouvrait les deux
-        # bouts. Le cote depart est strict : un simple tremblement autour de
-        # la ligne sans franchissement n'est pas compte.
+        # bouts. Le cote depart est strict, ce qui garantit qu'une personne
+        # qui fait demi-tour APRES avoir franchi n'est pas recomptee : elle
+        # arrive cote negatif, son retour vers le cote positif n'est pas
+        # retenu (l'aller-retour compte 1, pas 2).
+        #
+        # En revanche ce module ne garantit RIEN sur les tremblements : il
+        # ne voit qu'une suite de coordonnees et ne distingue pas une
+        # personne qui s'eloigne d'une personne qui oscille sur place. Mesure
+        # faite : osciller de +/-1 px autour de la ligne donne 19 traversees
+        # retenues en 39 frames, et une personne immobile a 1 px (alternance
+        # x=99/100) en donne 14 en 29 frames. C'est a l'anti-rebond (_deja_comptes,
+        # tache 5) qu'il revient de ne pas recompter la meme personne, pas a
+        # cette geometrie. Ne pas ecrire ici de garantie sur les tremblements.
         if not (c_avant > 0 >= c_apres):
             return False
 
