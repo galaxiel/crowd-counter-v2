@@ -139,51 +139,75 @@ import pathlib
 
 import pytest
 
-LIVRABLES = list((pathlib.Path(__file__).resolve().parent.parent / "compteur").rglob("*.py"))
-MODULES_INTERDITS = {"PySide6", "PyQt5", "PyQt6", "tkinter", "wx"}
+# Ancré sur l'emplacement de ce fichier, pas sur le répertoire courant : la
+# suite doit passer même lancée depuis un autre dossier (scripts de la tâche 7,
+# exécution PyInstaller depuis dist/ à la tâche 12).
+RACINE = pathlib.Path(__file__).resolve().parent.parent
+LIVRABLES = sorted((RACINE / "compteur").rglob("*.py"))
+# Racines des toolkits. La détection se fait par préfixe, donc "PySide6.QtWidgets"
+# est rattrapé par "PySide6" et n'a pas besoin d'être listé séparément.
+MODULES_INTERDITS = {"PySide6", "tkinter", "PyQt5", "PyQt6", "wx"}
 
 
-def test_le_paquet_compteur_existe():
-    assert (pathlib.Path("compteur") / "__init__.py").exists(), (
-        "le paquet compteur/ doit exister dès la tâche 1"
-    )
+def imports_interdits(fichier: pathlib.Path) -> set[str]:
+    """Modules graphiques importés par `fichier`, par comparaison de préfixe.
 
-
-def imports_interdits(source: str) -> set[str]:
-    """Modules graphiques importés par ``source``. Match par préfixe.
-
-    Le préfixe est indispensable : ``from PySide6.QtWidgets import QApplication``
-    donne ``noeud.module == "PySide6.QtWidgets"``, qui ne correspond
-    exactement à aucune racine — c'est la forme idiomatique de tous les
-    imports Qt, donc une correspondance exacte ne garantit rien.
+    Couvre `import X`, `import X.Y` et `from X.Y import Z` : l'AST donne
+    "X.Y" dans les trois cas, et le préfixe rattrape tous les sous-modules
+    d'une racine interdite.
     """
-    arbre = ast.parse(source)
-    importes: set[str] = set()
+    arbre = ast.parse(fichier.read_text(encoding="utf-8"))
+    importes = set()
     for noeud in ast.walk(arbre):
         if isinstance(noeud, ast.Import):
             importes.update(a.name for a in noeud.names)
         elif isinstance(noeud, ast.ImportFrom) and noeud.module:
             importes.add(noeud.module)
     return {
-        i for i in importes
+        i
+        for i in importes
         if any(i == m or i.startswith(m + ".") for m in MODULES_INTERDITS)
     }
 
 
+def test_le_paquet_compteur_existe():
+    assert (RACINE / "compteur" / "__init__.py").exists(), (
+        "le paquet compteur/ doit exister dès la tâche 1"
+    )
+
+
 @pytest.mark.parametrize("chemin", LIVRABLES, ids=lambda p: p.name)
 def test_aucun_import_graphique_dans_compteur(chemin):
-    interdites = imports_interdits(chemin.read_text(encoding="utf-8"))
+    interdites = imports_interdits(chemin)
     assert not interdites, f"{chemin} importe {interdites}, interdit dans compteur/"
 
 
 def test_detecte_import_qt_profond(tmp_path):
-    """Preuve de non-vacuité : la forme idiomatique doit être attrapée."""
-    source = "from PySide6.QtWidgets import QApplication\n"
-    assert imports_interdits(source) == {"PySide6.QtWidgets"}
+    """Non-vacuité : la forme `from PySide6.QtWidgets import X` doit être vue.
+
+    C'est la forme qu'écriront les tâches 8-10. Avant la correspondance par
+    préfixe, elle passait sous le radar du test paramétré.
+    """
+    source = tmp_path / "widget.py"
+    source.write_text(
+        "from PySide6.QtWidgets import QApplication\n"
+        "import PySide6.QtCore\n"
+        "from PyQt6.QtWidgets import QLabel\n"
+        "import numpy\n",
+        encoding="utf-8",
+    )
+    assert imports_interdits(source) == {
+        "PySide6.QtWidgets",
+        "PySide6.QtCore",
+        "PyQt6.QtWidgets",
+    }
 
 
-def test_laisse_passer_les_modules_sans_risque():
-    assert imports_interdits("import numpy\nimport json\n") == set()
+def test_module_propre_ne_declenche_pas(tmp_path):
+    """Contre-test : un module sans import graphique ne déclenche rien."""
+    source = tmp_path / "propre.py"
+    source.write_text("import numpy as np\nimport json\n", encoding="utf-8")
+    assert imports_interdits(source) == set()
 ```
 
 - [ ] **Étape 2 : Lancer le test, vérifier qu'il échoue**
@@ -339,6 +363,8 @@ Créer `tests/test_config.py` :
 ```python
 import json
 
+import pytest
+
 from compteur.config import Config, chemin_defaut_config
 
 
@@ -355,44 +381,20 @@ def test_aller_retour_fichier(tmp_path):
     assert Config.depuis_fichier(p) == c
 
 
+def test_vers_fichier_cree_les_dossiers_manquants(tmp_path):
+    """vers_fichier crée l'arborescence : tmp_path/"c.json" a un parent qui
+    existe déjà, mkdir(parents=True) n'était donc jamais exercée."""
+    p = tmp_path / "sous" / "dossier" / "c.json"
+    assert not p.parent.exists()
+    c = Config(modele="x.pt", ligne=(1.0, 2.0, 3.0, 4.0))
+    c.vers_fichier(p)
+    assert p.exists()
+    assert Config.depuis_fichier(p) == c
+
+
 def test_ligne_none_est_acceptee():
     c = Config(modele="x.pt", ligne=None)
     assert c.depuis_dict(c.vers_dict()).ligne is None
-
-
-def test_ligne_non_nulle_fait_laller_retour_en_liste():
-    c = Config(modele="x.pt", ligne=(10.0, 20.0, 30.0, 40.0))
-    d = c.vers_dict()
-    assert d["ligne"] == [10.0, 20.0, 30.0, 40.0], "le JSON doit produire une liste"
-    retour = Config.depuis_dict(d)
-    assert retour.ligne == (10.0, 20.0, 30.0, 40.0), "le retour doit être un tuple"
-
-
-def test_classes_retenues_fait_laller_retour():
-    c = Config(modele="x.pt", classes_retenues=[0, 2])
-    assert Config.depuis_dict(c.vers_dict()).classes_retenues == [0, 2]
-
-
-def test_cle_inconnue_refusee():
-    with pytest.raises(ValueError):
-        Config.depuis_dict({"modele": "x.pt", "parametre_qui_nexiste_pas": 1})
-
-
-def test_defauts_lu_le_fichier_versionne():
-    assert Config.defauts().modele == json.loads(
-        chemin_defaut_config().read_text(encoding="utf-8")
-    )["modele"]
-
-
-def test_valeurs_par_defaut_ne_divergent_pas_du_fichier():
-    """Le dataclass et config/default.json doivent rester synchronisés."""
-    assert Config() == Config.depuis_fichier(chemin_defaut_config())
-
-
-def test_vers_fichier_cree_les_repertoires_manquants(tmp_path):
-    p = tmp_path / "sous" / "dossier" / "c.json"
-    Config(modele="x.pt").vers_fichier(p)
-    assert p.exists(), "vers_fichier doit créer l'arborescence manquante"
 
 
 def test_config_par_defaut_existe():
@@ -400,15 +402,75 @@ def test_config_par_defaut_existe():
 
 
 def test_config_par_defaut_est_valide():
-    """Vérifie que le fichier versionné est chargeable, rien de plus.
+    """La config par défaut est chargeable sans erreur.
 
-    Le module ne fait PAS de validation de type : passer un int à la place d'un
-    float n lève rien. Ce test garantit seulement que le fichier livré est
-    syntaxiquement et structurellement correct.
+    `depuis_dict` rejette une clé inconnue ; le module ne valide pas les types
+    au-delà des conversions tuple/liste et str/int.
     """
     d = json.loads(chemin_defaut_config().read_text(encoding="utf-8"))
-    Config.depuis_dict(d)  # lève si une clé est inconnue ou manquante
-    assert set(d) == {f.name for f in __import__("dataclasses").fields(Config)}
+    Config.depuis_dict(d)
+
+
+def test_ligne_non_nulle_est_serialisee_en_liste():
+    """vers_dict doit produire du JSON valide : un tuple n'est pas sérialisable."""
+    c = Config(modele="x.pt", ligne=(10.0, 20.0, 30.0, 40.0))
+    d = c.vers_dict()
+    assert isinstance(d["ligne"], list), "JSON n'a pas de tuple"
+    assert d["ligne"] == [10.0, 20.0, 30.0, 40.0]
+    assert all(isinstance(v, float) for v in d["ligne"])
+    # ... et le retour redonne bien un tuple de 4 floats.
+    assert Config.depuis_dict(d).ligne == (10.0, 20.0, 30.0, 40.0)
+
+
+def test_ligne_depuis_json_reste_un_tuple():
+    c = Config.depuis_dict({"modele": "x.pt", "ligne": [1, 2, 3, 4]})
+    assert c.ligne == (1.0, 2.0, 3.0, 4.0)
+    assert isinstance(c.ligne, tuple)
+
+
+def test_classes_retenues_non_nulles_font_l_aller_retour():
+    c = Config(modele="x.pt", classes_retenues=[0, 2])
+    d = c.vers_dict()
+    assert d["classes_retenues"] == [0, 2]
+    assert Config.depuis_dict(d).classes_retenues == [0, 2]
+
+
+def test_classes_retenues_sont_converties_en_entiers():
+    c = Config.depuis_dict({"modele": "x.pt", "classes_retenues": ["0", 2.0]})
+    assert c.classes_retenues == [0, 2]
+    assert all(isinstance(v, int) for v in c.classes_retenues)
+
+
+def test_cle_inconnue_rejetee():
+    with pytest.raises(ValueError, match="inconnues"):
+        Config.depuis_dict({"modele": "x.pt", "parametre_inexistant": 1})
+
+
+def test_defauts_lit_le_fichier_versionne():
+    """defauts() doit renvoyer ce que contient config/default.json."""
+    assert Config.defauts() == Config.depuis_fichier(chemin_defaut_config())
+
+
+def test_defauts_sans_fichier_signale_un_repli(monkeypatch, tmp_path, caplog):
+    """Sans config/default.json, defauts() replie mais le dit."""
+    monkeypatch.setattr(
+        "compteur.config.chemin_defaut_config", lambda: tmp_path / "absent.json"
+    )
+    with caplog.at_level("WARNING", logger="compteur.config"):
+        c = Config.defauts()
+    assert c == Config()
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "default.json" in messages, "le repli doit être journalisé, pas silencieux"
+
+
+def test_defauts_et_valeurs_du_dataclass_ne_divergent_pas():
+    """Le fichier versionné et les valeurs par défaut du dataclass coincident.
+
+    Toute valeur par défaut doit lire config/default.json : si le fichier et le
+    dataclass divergent, Config() (utilisé quand le fichier manque) et
+    Config.defauts() ne décrivent plus la même application.
+    """
+    assert Config() == Config.depuis_fichier(chemin_defaut_config())
 ```
 
 - [ ] **Étape 6 : Lancer les tests, vérifier qu'ils échouent**
