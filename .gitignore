@@ -23,3 +23,5 @@ build/
 dist/
 *.spec
 .pytest_cache/
+.coverage
+.coverage.*
