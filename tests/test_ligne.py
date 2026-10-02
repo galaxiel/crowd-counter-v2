@@ -134,6 +134,27 @@ def test_hysteresis_est_expose():
     assert l.hysteresis == 4
 
 
+def test_traversee_diagonale_comptee_au_croisement_interpole():
+    """Le croisement est juge a sa position interpolee, pas a celle de ``avant``.
+
+    Ligne courte y=500..600, marche diagonale de (90,400) a (110,700) : le
+    croisement reel est en (100, 550), sur le segment. Prendre ``avant``
+    donnerait s = -100, hors segment, et la traversee serait refusee a tort.
+    """
+    l = Ligne(p1=(100.0, 500.0), p2=(100.0, 600.0), epaisseur=30, sens=1)
+    assert l.a_traverse((90.0, 400.0), (110.0, 700.0)) is True
+
+
+def test_croisement_diagonal_hors_segment_non_compte():
+    """Meme diagonale, mais le croisement interpole sort apres la fin du segment.
+
+    Le point de depart est pourtant sur le segment : seule l'interpolation
+    permet de le refuser.
+    """
+    l = Ligne(p1=(100.0, 500.0), p2=(100.0, 600.0), epaisseur=30, sens=1)
+    assert l.a_traverse((90.0, 550.0), (110.0, 900.0)) is False
+
+
 def test_dessiner_ne_crash_pas_et_ne_mute_pas():
     img = np.zeros((200, 200, 3), dtype=np.uint8)
     l = ligne_haut_vers_bas()

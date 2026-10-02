@@ -654,7 +654,8 @@ git commit -m "feat: socle du moteur — types, config, isolation UI garantie"
   - `compteur.ligne.Ligne(p1: tuple[float, float], p2: tuple[float, float], epaisseur: int = 30, sens: int = 1, hysteresis: int = 2)`
     Attributs exposés : `.p1`, `.p2`, `.epaisseur`, `.sens`, `.hysteresis`.
   - `.point_du_cote(p: tuple[float, float]) -> int` — retourne `+1` si `p` est du
-    côté « avant », `-1` du côté « après », `0` si `p` est dans la bande.
+    côté de la normale positive, `-1` du côté négatif, `0` si `p` est dans la
+    bande. Voir « Géométrie retenue » pour l'articulation avec `sens`.
   - `.vecteur_normal() -> tuple[float, float]` — normal unitaire, orientée selon
     `sens` : positive dans la direction de traversée retenue.
   - `.coordonnee_projetee(p: tuple[float, float]) -> float` — position signée
@@ -672,12 +673,20 @@ git commit -m "feat: socle du moteur — types, config, isolation UI garantie"
 - `d = normalize(p2 - p1)` — direction le long de la ligne.
 - `n = (-d.y, d.x)` — normale, perpendiculaire.
 - `coordonnee_projetee(p) = dot(p - p1, n)` — signée, 0 exactement sur la ligne.
-- Le côté « avant » (celui d'où l'on vient) correspond à `coordonnee < 0`
-  quand `sens = +1`, et `coordonnee > 0` quand `sens = -1`.
-- Le passage est retenu quand la coordonnée projeteé change de signe dans le
-  sens indiqué **et** que le déplacement total sur la normale dépasse
-  `epaisseur / 2` (on exige qu'on traverse toute la bande, pas qu'on effleure
-  la ligne).
+- `point_du_cote(p) = +1` si la coordonnée projetée est `> epaisseur / 2`
+  (côté de la normale **positive**), `-1` si elle est `< -epaisseur / 2`, `0`
+  entre les deux. Ces noms sont relatifs à la normale, elle-même orientée par
+  `sens` : `+1` est donc le côté d'arrivée quand `sens = +1`, et le côté de
+  départ quand `sens = -1`. ~~« le côté avant correspond à `coordonnee < 0`
+  quand `sens = +1` »~~ — cette formulation de la prose était **inversée**
+  par rapport au code livré et à ses tests ; c'est la règle ci-dessus qui fait
+  foi (voir `.superpowers/sdd/2026-10-02-comptage-manifestation/task-2-report.md`).
+- Une traversée est retenue quand la coordonnée projetée passe du côté
+  **strictement positif** au côté négatif **ou nul** (intervalle semi-ouvert :
+  la ligne elle-même appartient au côté d'arrivée), **et** que le point de
+  croisement interpolé tombe le long du segment dessiné. Le déplacement sur la
+  normale n'a pas à dépasser `epaisseur / 2` : la réponse est la même quelle que
+  soit la vitesse de la personne.
 
 - [ ] **Étape 1 : Écrire les tests, tous doivent échouer**
 
@@ -854,7 +863,7 @@ class Ligne:
         return -self.epaisseur / 2.0 <= t <= longueur + self.epaisseur / 2.0
 
     def point_du_cote(self, p: tuple[float, float]) -> int:
-        """``+1`` côté d'arrivée, ``-1`` côté de départ, ``0`` dans la bande."""
+        """``+1`` côté de la normale POSITIVE, ``-1`` côté négatif, ``0`` dans la bande."""
         c = self.coordonnee_projetee(p)
         if c > self.epaisseur / 2.0:
             return 1
@@ -865,19 +874,26 @@ class Ligne:
     def a_traverse(self, avant: tuple[float, float], apres: tuple[float, float]) -> bool:
         """Le passage de ``avant`` à ``apres`` est-il un franchissement retenu ?
 
-        Trois conditions cumulatives : les deux points sont dans la zone de la
-        ligne, le côté a changé, et le déplacement sur la normale dépasse la
-        demi-bande (on exige de traverser toute la bande, pas d'effleurer).
+        Une traversée est un changement de côté de la ligne, ET le croisement
+        doit avoir lieu le long du segment dessiné. On interpole le point
+        exact de croisement.
         """
-        if not self.contient(avant) and not self.contient(apres):
-            return False
         c_avant = self.coordonnee_projetee(avant)
         c_apres = self.coordonnee_projetee(apres)
-        if c_avant * c_apres > 0:
-            return False  # pas de changement de côté
-        if abs(c_apres - c_avant) < self.epaisseur:
-            return False  # simple tremblement, pas une traversée
-        return True
+        # Intervalle semi-ouvert : la ligne (c == 0) appartient au côté
+        # d'arrivée. Un simple tremblement sans franchissement n'est pas compté.
+        if not (c_avant > 0 >= c_apres):
+            return False
+
+        # Position du croisement, interpolée entre les deux points.
+        t = c_avant / (c_avant - c_apres)
+        croisement = (
+            avant[0] + (apres[0] - avant[0]) * t,
+            avant[1] + (apres[1] - avant[1]) * t,
+        )
+        s = self.parametre_along(croisement)
+        longueur = math.hypot(self.p2[0] - self.p1[0], self.p2[1] - self.p1[1])
+        return -self.epaisseur / 2.0 <= s <= longueur + self.epaisseur / 2.0
 
     # -- Rendu -----------------------------------------------------------
 
@@ -927,7 +943,10 @@ def _cv2():
 python -m pytest tests/test_ligne.py -v
 ```
 
-Attendu : TOUT PASSE (11 tests).
+Attendu : TOUT PASSE. Le fichier de tests fourni dans ce plan en contient
+**10**, pas 11 (le décompte annoncé était faux). Après les correctifs de la
+revue, `tests/test_ligne.py` en compte **23** et la suite complète **50**
+(10 d'origine + 13 ajoutés).
 
 - [ ] **Étape 5 : Commit**
 
