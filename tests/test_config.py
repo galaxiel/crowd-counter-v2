@@ -88,6 +88,18 @@ def test_defauts_lit_le_fichier_versionne():
     assert Config.defauts() == Config.depuis_fichier(chemin_defaut_config())
 
 
+def test_defauts_sans_fichier_signale_un_repli(monkeypatch, tmp_path, caplog):
+    """Sans config/default.json, defauts() replie mais le dit."""
+    monkeypatch.setattr(
+        "compteur.config.chemin_defaut_config", lambda: tmp_path / "absent.json"
+    )
+    with caplog.at_level("WARNING", logger="compteur.config"):
+        c = Config.defauts()
+    assert c == Config()
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "default.json" in messages, "le repli doit être journalisé, pas silencieux"
+
+
 def test_defauts_et_valeurs_du_dataclass_ne_divergent_pas():
     """Le fichier versionné et les valeurs par défaut du dataclass coincident.
 

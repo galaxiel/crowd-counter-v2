@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, fields
+
+log = logging.getLogger(__name__)
 
 RACINE = pathlib.Path(__file__).resolve().parent.parent
 
@@ -69,4 +72,12 @@ class Config:
         p = chemin_defaut_config()
         if p.exists():
             return cls.depuis_fichier(p)
+        # Repli sur les valeurs du dataclass (cas PyInstaller sans config/).
+        # La contrainte « toute valeur par défaut doit lire config/default.json »
+        # n'est plus respectée : on le signale plutôt que de démarrer en silence.
+        log.warning(
+            "config/default.json introuvable (%s) : repli sur les valeurs "
+            "par défaut codées en dur, qui peuvent diverger du fichier.",
+            p,
+        )
         return cls()
