@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Modèles : trop lourds pour git (50 Mo)
+*.pt
+*.onnx
+*.engine
+
+# Vidéo : fichiers de travail locaux
+*.mp4
+*.avi
+*.mkv
+
+# Résultats d'analyse
+resultat.csv
+rapport.json
+*_results.txt
+config/local_*.json
+
+build/
+dist/
+*.spec
