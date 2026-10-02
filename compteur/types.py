@@ -75,7 +75,6 @@ class FrameResult:
     presents: int = 0
     frame_index: int = 0
     timestamp_s: float = 0.0
-    indice: int = 0
     evenements: list[Evenement] = field(default_factory=list)
 
 
