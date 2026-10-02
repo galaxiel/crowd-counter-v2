@@ -18,6 +18,17 @@ def test_aller_retour_fichier(tmp_path):
     assert Config.depuis_fichier(p) == c
 
 
+def test_vers_fichier_cree_les_dossiers_manquants(tmp_path):
+    """vers_fichier crée l'arborescence : tmp_path/"c.json" a un parent qui
+    existe déjà, mkdir(parents=True) n'était donc jamais exercée."""
+    p = tmp_path / "sous" / "dossier" / "c.json"
+    assert not p.parent.exists()
+    c = Config(modele="x.pt", ligne=(1.0, 2.0, 3.0, 4.0))
+    c.vers_fichier(p)
+    assert p.exists()
+    assert Config.depuis_fichier(p) == c
+
+
 def test_ligne_none_est_acceptee():
     c = Config(modele="x.pt", ligne=None)
     assert c.depuis_dict(c.vers_dict()).ligne is None
