@@ -4,7 +4,11 @@ import pathlib
 
 import pytest
 
-LIVRABLES = sorted(pathlib.Path("compteur").rglob("*.py"))
+# Ancré sur l'emplacement de ce fichier, pas sur le répertoire courant : la
+# suite doit passer même lancée depuis un autre dossier (scripts de la tâche 7,
+# exécution PyInstaller depuis dist/ à la tâche 12).
+RACINE = pathlib.Path(__file__).resolve().parent.parent
+LIVRABLES = sorted((RACINE / "compteur").rglob("*.py"))
 # Racines des toolkits. La détection se fait par préfixe, donc "PySide6.QtWidgets"
 # est rattrapé par "PySide6" et n'a pas besoin d'être listé séparément.
 MODULES_INTERDITS = {"PySide6", "tkinter", "PyQt5", "PyQt6", "wx"}
@@ -32,7 +36,7 @@ def imports_interdits(fichier: pathlib.Path) -> set[str]:
 
 
 def test_le_paquet_compteur_existe():
-    assert (pathlib.Path("compteur") / "__init__.py").exists(), (
+    assert (RACINE / "compteur" / "__init__.py").exists(), (
         "le paquet compteur/ doit exister dès la tâche 1"
     )
 
