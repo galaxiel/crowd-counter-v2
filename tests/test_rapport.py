@@ -388,19 +388,38 @@ def test_indicateurs_comptent_les_tracks_distincts():
     assert f["evenements_par_track"] == pytest.approx(4 / 3, abs=0.005)
 
 
-def test_vie_moyenne_d_un_track_non_fabricable():
-    """On ne connaît pas l'âge des tracks : `Resultat` ne le transporte pas.
+def test_vie_moyenne_d_un_track_est_mesuree_par_le_compteur():
+    """La durée de vie d'un track est MESURÉE, pas reconstruite.
 
-    Un track ne peut être compté qu'une fois (registre anti-recomptage), donc
-    un événement ne dit rien de sa durée de vie. Publier une durée de vie
-    calculée sur les événements serait inventer une mesure.
+    Un premier jet laissait `None` en prétendant qu'elle n'était pas
+    mesurable depuis `Resultat`. C'était faux : `Compteur` voit les tracks
+    frame par frame, il mesure donc leur durée de vie réelle et la publie
+    dans `Resultat`. Le `None` masquait précisément l'indicateur qui permet
+    à un utilisateur de juger si son décompte tient — sur la vidéo de
+    référence, une durée de vie de 2 frames doit être visible, pas nulle.
     """
-    f = indicateurs_fiabilite(resultat_fictif())
-    assert f["duree_vie_moyenne_track_frames"] is None
-    assert f["nb_tracks_vus"] is None
+    r = resultat_fictif()
+    r.duree_vie_track_moy = 76.6
+    r.nb_tracks_vus = 2133
+    f = indicateurs_fiabilite(r)
+    assert f["duree_vie_moyenne_track_frames"] == pytest.approx(76.6)
+    assert f["nb_tracks_vus"] == 2133
+    # Plus d'avertissement « non mesurable » : l'affirmation serait fausse.
     avertissements = " ".join(f["avertissements"])
-    assert "durée de vie" in avertissements
-    assert "Resultat" in avertissements
+    assert "non mesurable" not in avertissements
+
+
+def test_vie_moyenne_nulle_est_signalee_comme_suspecte():
+    """Une durée de vie nulle signifie qu'aucun track n'a survécu une frame.
+
+    C'est le symptôme exact de la vidéo de référence : 92 personnes
+    détectées par frame et 0 comptée. Le dire vaut mieux qu'un `None`.
+    """
+    r = resultat_fictif()
+    r.duree_vie_track_moy = 0.0
+    r.nb_tracks_vus = 0
+    f = indicateurs_fiabilite(r)
+    assert f["duree_vie_moyenne_track_frames"] == pytest.approx(0.0)
 
 
 def test_zero_avec_foule_signale_un_defaut_de_comptage():

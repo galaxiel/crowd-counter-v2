@@ -65,6 +65,15 @@ class Compteur:
         # n'est jamais réinitialisé en cours de flux, donc purger ce registre
         # ne ferait que permettre un double comptage après une réapparition.
         self._deja_comptes: set[int] = set()
+        # Indicateurs de fiabilité, mesurés frame par frame :
+        # - `_vies_track` : track_id -> nombre de frames où il a été vu.
+        #   C'est la seule source honnête de la durée de vie d'un track —
+        #   un événement de franchissement ne la donne pas.
+        # - `_nb_tracks_vus`, `_nb_detections` : compteurs cumulés.
+        self._vies_track: dict[int, int] = {}
+        self._nb_tracks_vus = 0
+        self._nb_detections = 0
+        self._vus_precedents: set[int] = set()
         self._somme_presents = 0
         self._nb_frames_vues = 0
 
@@ -81,6 +90,10 @@ class Compteur:
         self._cotes.clear()
         self._stabilite.clear()
         self._deja_comptes.clear()
+        self._vies_track.clear()
+        self._nb_tracks_vus = 0
+        self._nb_detections = 0
+        self._vus_precedents.clear()
         self._somme_presents = 0
         self._nb_frames_vues = 0
         self.tracker.reinitialiser()
@@ -139,6 +152,15 @@ class Compteur:
         tracks = self.tracker.mettre_a_jour(detections, frame_index)
         nouveaux: list[Evenement] = []
         ligne = self.ligne
+
+        # Indicateurs de fiabilité, cumulés frame par frame.
+        self._nb_detections += len(detections)
+        vus: set[int] = set()
+        for t in tracks:
+            vus.add(t.track_id)
+            self._vies_track[t.track_id] = self._vies_track.get(t.track_id, 0) + 1
+        self._nb_tracks_vus += len(vus - self._vus_precedents)
+        self._vus_precedents = vus
 
         for t in tracks:
             identifiant = t.track_id
@@ -219,10 +241,30 @@ class Compteur:
             evenements=nouveaux,
         )
 
-    def resultat(self, modele: str, nb_frames: int, secondes: float) -> Resultat:
+    def resultat(
+        self,
+        modele: str,
+        nb_frames: int,
+        secondes: float,
+        duree_video_s: float = 0.0,
+    ) -> Resultat:
+        """Bilan de l'analyse.
+
+        `secondes` est le temps de CALCUL écoulé ; `duree_video_s` la durée de
+        la vidéo. Ce ne sont pas la même chose (le GPU va plus vite que le
+        temps réel) et les confondre fausse le débit par minute.
+
+        Les indicateurs de fiabilité sont mesurés ICI, pas reconstruits : on
+        connaît la durée de vie réelle de chaque track parce qu'on l'a vue
+        frame par frame. Les laisser à `None` dans l'export, ce que le
+        premier jet faisait, revient à masquer la seule information qui permet
+        à un utilisateur de juger son propre décompte.
+        """
         presents_moyen = (
             self._somme_presents / self._nb_frames_vues if self._nb_frames_vues else 0.0
         )
+        vies = list(self._vies_track.values())
+        duree_vie_moy = sum(vies) / len(vies) if vies else 0.0
         return Resultat(
             total=self.total,
             evenements=list(self.evenements),
@@ -232,6 +274,12 @@ class Compteur:
             presents_max=self.presents_max,
             presents_moyen=presents_moyen,
             secondes=secondes,
+            duree_video_s=duree_video_s,
+            duree_vie_track_moy=duree_vie_moy,
+            nb_tracks_vus=self._nb_tracks_vus,
+            detections_par_frame=(
+                self._nb_detections / self._nb_frames_vues if self._nb_frames_vues else 0.0
+            ),
         )
 
 
@@ -288,4 +336,9 @@ def analyser_video(
     finally:
         cap.release()
 
-    return compteur.resultat(config.modele, index, time.time() - debut)
+    return compteur.resultat(
+        config.modele,
+        index,
+        time.time() - debut,
+        duree_video_s=index / fps if fps > 0 else 0.0,
+    )

@@ -179,7 +179,13 @@ def statistiques(resultat: Resultat) -> dict:
     ``presents_moyen``, ``debit_max_par_minute``, ``modele`` et ``nb_frames``
     constituent le contrat avec `tools/comparer_modeles.py` et l'interface.
     """
-    duree = float(resultat.secondes or 0.0)
+    # Le débit se calcule sur la durée de la VIDÉO, pas sur le temps de calcul :
+    # le GPU travaille plus vite que le temps réel, et confondre les deux
+    # sous-estime le débit d'un facteur video/calcul (~2x sur la vidéo de
+    # référence). Repli sur `secondes` quand `duree_video_s` n'a pas été
+    # renseigné (Resultat construit à la main, appelant ancien).
+    duree_video = float(resultat.duree_video_s or 0.0)
+    duree = duree_video if duree_video > 0.0 else float(resultat.secondes or 0.0)
 
     if duree > 0.0 and resultat.total:
         debit = resultat.total / duree * 60.0
@@ -194,6 +200,8 @@ def statistiques(resultat: Resultat) -> dict:
     return {
         "total": resultat.total,
         "duree_s": round(duree, 2),
+        "duree_video_s": round(duree_video, 2),
+        "temps_calcul_s": round(float(resultat.secondes or 0.0), 2),
         "fps_moyen": round(resultat.nb_frames / duree, 2) if duree > 0.0 else None,
         "personnes_par_minute": round(debit, 1),
         # Le PIC est un compte d'événements sur la fenêtre réellement
@@ -320,29 +328,19 @@ def indicateurs_fiabilite(resultat: Resultat) -> dict:
             "verrou anti-recomptage n'a pas tenu, le total est gonflé."
         )
 
-    if nb_frames > 0 and duree > 0.0:
-        fps = nb_frames / duree
-        if fps < SEUIL_FPS_PLAUSIBLE:
+    # Avertissement qui reste VRAI : le seuil de plausibilité des images/s doit
+    # porter sur le temps de CALCUL, pas sur la durée de la vidéo. Sur la
+    # vidéo de référence le GPU traite 28 img/s pour une vidéo à 30 img/s :
+    # lire le ratio vidéo/calcul donnerait un fps trop flatteur.
+    if nb_frames > 0 and resultat.secondes > 0.0:
+        fps_calc = nb_frames / float(resultat.secondes)
+        if fps_calc < SEUIL_FPS_PLAUSIBLE:
             coherent = False
             avertissements.append(
-                f"{nb_frames} frames en {duree:.0f} s, soit {fps:.1f} images/s : "
-                "la durée enregistrée est probablement le temps de calcul et non "
-                "la durée de la vidéo. Le débit par minute est sous-estimé d'autant."
+                f"{nb_frames} frames en {float(resultat.secondes):.0f} s de "
+                f"calcul, soit {fps_calc:.1f} images/s : l'analyse a été plus "
+                "lente que le temps réel de la vidéo."
             )
-
-    # Ces deux limites sont des propriétés du MODÈLE DE DONNÉES, pas de
-    # cette exécution-ci : elles sont donc averties à chaque export, y compris
-    # quand le comptage s'est bien passé. Un lecteur qui trouve `null` sans
-    # explication croirait à une valeur oubliée.
-    avertissements.append(
-        "La durée de vie moyenne d'un track n'est pas mesurable depuis "
-        "`Resultat` : il ne transporte que les événements de franchissement, "
-        "et le verrou anti-recomptage en donne au plus un par track."
-    )
-    avertissements.append(
-        "Le nombre total de tracks vus n'est pas mesurable depuis `Resultat` : "
-        "seules les identités ayant franchi la ligne y figurent."
-    )
 
     if nb_frames > 0 and total > 0:
         fenetre = _fenetre_de_reel(resultat)
@@ -365,9 +363,12 @@ def indicateurs_fiabilite(resultat: Resultat) -> dict:
             round(nb_frames / total, 2) if nb_frames > 0 and total > 0 else None
         ),
         "intervalle_median_evenements_s": _intervalle_median(evenements),
-        # -- non mesurable depuis Resultat --
-        "nb_tracks_vus": None,
-        "duree_vie_moyenne_track_frames": None,
+        # Mesurés côté `Compteur` : c'est lui qui voit les tracks frame par
+        # frame. Un événement de franchissement ne les donnerait pas (le
+        # verrou anti-recomptage en fournit au plus un par track), et la
+        # durée de vie d'un track est justement ce qui dit si le suivi tient.
+        "nb_tracks_vus": resultat.nb_tracks_vus,
+        "duree_vie_moyenne_track_frames": round(resultat.duree_vie_track_moy, 1),
         # -- lecture --
         "coherent": coherent,
         "avertissements": avertissements,

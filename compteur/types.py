@@ -89,4 +89,16 @@ class Resultat:
     nb_frames: int = 0
     presents_max: int = 0
     presents_moyen: float = 0.0
+    # Deux durées distinctes, à ne pas confondre :
+    # - `secondes` = temps de CALCUL écoulé (le GPU travaille plus vite que
+    #   le temps réel de la vidéo) ;
+    # - `duree_video_s` = durée de la VIDÉO analysée.
+    # Le débit par minute se calcule sur `duree_video_s`. Les confondre
+    # sous-estime le débit d'un facteur video/temps de calcul, soit ~2x ici.
     secondes: float = 0.0
+    duree_video_s: float = 0.0
+    # Indicateurs de FIABILITÉ du comptage. L'export les publie pour qu'un
+    # utilisateur puisse juger lui-même si le décompte tient.
+    duree_vie_track_moy: float = 0.0
+    nb_tracks_vus: int = 0
+    detections_par_frame: float = 0.0
