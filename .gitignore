@@ -21,7 +21,13 @@ config/local_*.json
 
 build/
 dist/
+
+# Fichiers de build PyInstaller générés par défaut (`--onefile` en produit
+# un éphémère) : on garde SEULEMENT le .spec du projet, qui est la
+# description reproductible de l'exécutable et doit être relu en code.
 *.spec
+!crowd-counter.spec
+
 .pytest_cache/
 .coverage
 .coverage.*

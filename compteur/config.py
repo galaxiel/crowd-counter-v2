@@ -5,16 +5,52 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import sys
 from dataclasses import asdict, dataclass, fields
 
 log = logging.getLogger(__name__)
 
-RACINE = pathlib.Path(__file__).resolve().parent.parent
+
+def _racine() -> pathlib.Path:
+    """Dossier racine des données de l'application.
+
+    Deux régimes, et ils n'ont rien en commun :
+
+    - **Depuis les sources** (`python main.py`) : le dépôt, déduit de
+      l'emplacement de ce fichier — deux niveaux au-dessus de `compteur/`.
+    - **Sous PyInstaller** (`sys.frozen`) : le fichier n'est pas dans le
+      dossier de l'application. En mode *onefile*, `__file__` pointe vers le
+      dossier temporaire d'extraction (`%TEMP%\\_MEIxxxxxx`), et
+      `parent.parent` ne remonte nulle part : `config/default.json` serait
+      introuvable et `Config.defauts()` partirait sur un repli silencieux.
+      Le dossier d'extraction se lit dans `sys._MEIPASS`.
+
+    `sys._MEIPASS` a la priorité : c'est le seul emplacement garanti par le
+    fichier `.spec` (`datas=[("config/default.json", "config")]`). Si un
+    `one-folder` le définit aussi, les deux points convergent.
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return pathlib.Path(meipass)
+        # one-folder sans _MEIPASS : le dossier de l'exécutable, où le .spec
+        # dépose `config/` en une collection.
+        return pathlib.Path(sys.executable).resolve().parent
+    return pathlib.Path(__file__).resolve().parent.parent
+
+
+RACINE = _racine()
 
 
 def chemin_defaut_config() -> pathlib.Path:
-    """Chemin du fichier de valeurs par défaut, versionné avec le projet."""
-    return RACINE / "config" / "default.json"
+    """Chemin du fichier de valeurs par défaut, versionné avec le projet.
+
+    Résolu à chaque appel, et non figé dans `RACINE` à l'import : sous
+    PyInstaller, `RACINE` est figé avant que quiconque ne sache dans quel
+    dossier on a été décompressé, et les tests figent `sys.frozen` bien après
+    l'import du module. Recalculer rend le chemin vérifiable.
+    """
+    return _racine() / "config" / "default.json"
 
 
 @dataclass
