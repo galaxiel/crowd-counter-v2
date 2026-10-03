@@ -20,20 +20,43 @@ def chemin_defaut_config() -> pathlib.Path:
 @dataclass
 class Config:
     # Détection
-    modele: str = "yolov8n-head.pt"
+    # medium.pt : modèle de tête entraîné sur SCUT-HEAD (foule dense). Sur la
+    # vidéo de référence il donne des têtes de 29 px contre 21 px pour
+    # yolov8n-head.pt, soit 38 % de marches réelles en plus.
+    modele: str = "medium.pt"
     seuil_confiance: float = 0.25
-    taille_min_px: int = 20
+    # Une tête détectée sur cette vidéo fait 20-29 px : un seuil de 20 px
+    # filtrerait la moitié des détections. 3 px ne filtre que le bruit.
+    taille_min_px: int = 3
     classes_retenues: list[int] | None = None
     taille_entree: int = 640
     # Tracker
     frames_confirmation: int = 3
     survie_max: int = 30
-    seuil_matching: float = 0.5
+    # Une tete de 29 px qui bouge de 15 px/frame a une IoU de 0.32 avec
+    # elle-meme : a 0.5 le tracker perdrait la personne. Sur la video de
+    # reference le deplacement est de 0.69 px (IoU 0.95), tres au-dessus.
+    seuil_matching: float = 0.3
     # Ligne
     ligne: tuple[float, float, float, float] | None = None
     epaisseur_bande: int = 30
     sens: int = 1
     frames_hysteresis: int = 2
+    # Lissage
+    # Fenêtre de la moyenne mobile des positions d'un track, en frames. Le
+    # mouvement réel d'une personne (~0,7 px/frame sur la vidéo de référence)
+    # est noyé dans le bruit du détecteur : sans lissage, le test de
+    # franchissement porte sur une position qui ne « bouge » pas d'une frame à
+    # l'autre (déplacement médian mesuré : 0,00 px). La moyenne des K
+    # dernières positions fait ressortir la tendance — le bruit aléatoire
+    # s'annule par moyennage, le mouvement constant se cumule.
+    # K=1 = mode « brut » : position instantanée, comportement inchangé.
+    # K>1 a été essayé puis retiré : le lissage retarde la position d'une
+    # demi-fenetre, donc au moment où le croisement est détecté la position
+    # lissée est encore dans la bande, `point_du_cote` renvoie 0, le côté de
+    # départ n'est jamais mémorisé et le comptage est perdu. Mesuré : K=5
+    # invalide déjà le franchissement, quelle que soit la vitesse.
+    fenetre_lissage: int = 1
 
     def vers_dict(self) -> dict:
         d = asdict(self)

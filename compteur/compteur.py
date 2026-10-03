@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from typing import Callable
 
 import numpy as np
@@ -32,6 +33,11 @@ class Compteur:
     """
 
     def __init__(self, config: Config, detecteur, tracker) -> None:
+        if config.fenetre_lissage < 1:
+            raise ValueError(
+                f"fenetre_lissage doit valoir au moins 1, "
+                f"reçu {config.fenetre_lissage}"
+            )
         self.config = config
         self.detecteur = detecteur
         self.tracker = tracker
@@ -42,7 +48,14 @@ class Compteur:
         # Liste mutée en place, jamais réassignée : l'IHM (tâche 11) en garde
         # une référence pour son panneau d'audit.
         self.evenements: list[Evenement] = []
+        # Position utilisée pour le test de franchissement : moyenne des K
+        # dernières positions connues du track (K = `fenetre_lissage`).
+        # K=1 y dépose la position instantanée — c'est le mode « brut ».
         self._derniers_centers: dict[int, tuple[float, float]] = {}
+        # Historique brut par track, borné à K positions (deque à maxlen).
+        # Nécessaire en plus de `_derniers_centers` : celui-ci ne retient que
+        # la position lissée, pas les K échantillons qui l'ont produite.
+        self._historiques: dict[int, deque[tuple[float, float]]] = {}
         # Dernier CÔTÉ stable observé par track (+1, -1 ; jamais 0).
         self._cotes: dict[int, int] = {}
         # Frames consécutives passées du côté de DÉPART, par track.
@@ -64,6 +77,7 @@ class Compteur:
         self.presents_max = 0
         self.evenements.clear()
         self._derniers_centers.clear()
+        self._historiques.clear()
         self._cotes.clear()
         self._stabilite.clear()
         self._deja_comptes.clear()
@@ -78,9 +92,45 @@ class Compteur:
         ``TypeError``, d'où la conversion explicite. Les registres sont des
         dict, on supprime donc par clé — ``dict`` n'a pas de ``discard``.
         """
-        for registre in (self._derniers_centers, self._cotes, self._stabilite):
+        for registre in (
+            self._derniers_centers,
+            self._historiques,
+            self._cotes,
+            self._stabilite,
+        ):
             for identifiant in set(registre) - vus:
                 del registre[identifiant]
+
+    def _position_lissee(
+        self, identifiant: int, center: tuple[float, float]
+    ) -> tuple[float, float]:
+        """Moyenne des K dernières positions connues de ce track.
+
+        Le bruit du détecteur est aléatoire d'une frame à l'autre : il
+        s'annule par moyennage. Le mouvement réel, lui, est constant d'une
+        frame à l'autre : il se cumule. C'est ce qui fait émerger le
+        déplacement réel d'un signal où le déplacement médian mesuré entre
+        deux frames est de 0,00 px.
+
+        ``fenetre_lissage = 1`` rend la position instantanée EXACTEMENT :
+        c'est le mode « brut », celui d'avant ce lissage, conservé comme
+        mode de comparaison.
+        """
+        historique = self._historiques.get(identifiant)
+        if historique is None:
+            # `maxlen` borne la mémoire par track à K positions, sans purge
+            # manuelle : au-delà de K frames, la plus ancienne tombe.
+            historique = deque(maxlen=self.config.fenetre_lissage)
+            self._historiques[identifiant] = historique
+        historique.append(center)
+        if len(historique) == 1:
+            # Une seule position connue : la moyenne ne peut être qu'elle-même.
+            return center
+        n = len(historique)
+        return (
+            sum(p[0] for p in historique) / n,
+            sum(p[1] for p in historique) / n,
+        )
 
     def traiter_frame(
         self, img: np.ndarray, frame_index: int, timestamp_s: float
@@ -92,8 +142,15 @@ class Compteur:
 
         for t in tracks:
             identifiant = t.track_id
+            # Position LISSEE : moyenne des K dernières positions de ce track.
+            # C'est elle qui décide du franchissement — le bruit du détecteur
+            # y est moyené, le mouvement réel y est cumulé. Le côté et la
+            # stabilité, eux, restent lus sur la position instantanée : le
+            # verrou anti-rebond est inchangé, seule l'entrée du test
+            # `a_traverse` diffère.
+            position = self._position_lissee(identifiant, t.center)
             precedent = self._derniers_centers.get(identifiant)
-            self._derniers_centers[identifiant] = t.center
+            self._derniers_centers[identifiant] = position
 
             if identifiant in self._deja_comptes or ligne is None:
                 continue
@@ -118,7 +175,7 @@ class Compteur:
                 else:
                     self._stabilite[identifiant] = 0
 
-            if precedent is None or not ligne.a_traverse(precedent, t.center):
+            if precedent is None or not ligne.a_traverse(precedent, position):
                 continue
 
             # Verrou anti-rebond : la personne venait-elle du bon côté, et

@@ -1,14 +1,15 @@
 {
-  "modele": "yolov8n-head.pt",
+  "modele": "medium.pt",
   "seuil_confiance": 0.25,
-  "taille_min_px": 20,
+  "taille_min_px": 3,
   "classes_retenues": null,
   "taille_entree": 640,
   "frames_confirmation": 3,
   "survie_max": 30,
-  "seuil_matching": 0.5,
+  "seuil_matching": 0.3,
   "ligne": null,
   "epaisseur_bande": 30,
   "sens": 1,
-  "frames_hysteresis": 2
+  "frames_hysteresis": 2,
+  "fenetre_lissage": 1
 }

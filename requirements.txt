@@ -1,9 +1,9 @@
 torch>=2.4
 ultralytics>=8.3
-# supervision>=0.28 déprécie sv.ByteTrack (retrait prévu en 0.31) au profit du
-# paquet externe `trackers`. Le plan impose supervision : on borne donc la
-# version tant que le port n'est pas fait.
-supervision>=0.6,<0.31
+# supervision n'est PLUS une dépendance : le tracking est associatif par IoU
+# (compteur/tracker.py), écrit dans ce dépôt. Vérifié : aucun `import
+# supervision` dans compteur/ ni interface/ — seule une mention en commentaire
+# subsiste, dans le nom historique `_BackendSupervision`.
 opencv-python>=4.10
 numpy>=1.26
 Pillow>=10.4
