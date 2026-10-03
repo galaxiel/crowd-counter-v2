@@ -222,4 +222,6 @@ else:
     # si l'application est en onefile ou en one-dossier. Le fichier est écrit
     # à côté de l'exécutable, pas dans `coll.contents_directory` (`_internal`),
     # pour que l'utilisateur puisse le lire et le supprimer.
-    pathlib.Path(coll.name, "pyi_mode.txt").write_text("onedir\n", encoding="utf-8")
+    # `Path` est importé en tête de fichier ; le nom court `pathlib` n'existe
+    # pas ici, et le build échoue sur un NameError qui masque tout le reste.
+    Path(coll.name, "pyi_mode.txt").write_text("onedir\n", encoding="utf-8")
