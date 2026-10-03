@@ -99,7 +99,13 @@ a = Analysis(
     ],
     hookspath=[str(RACINE / "hooks")],
     hooksconfig={},
-    runtime_hooks=[],
+    # Sonde de diagnostic, SANS EFFET en usage normal : le corps entier est
+    # sous `if os.environ.get("COMPTEUR_PROBE")`. Poser cette variable fait
+    # écrire à l'exécutable gelé un rapport JSON sur la résolution de
+    # `config/default.json` — la seule façon de prouver que le fichier
+    # embarqué est lu, un repli silencieux ne levant rien. Voir
+    # tools/injection_probe.py et tools/verifier_config_gelee.py.
+    runtime_hooks=[str(RACINE / "tools" / "injection_probe.py")],
     # `matplotlib` est importé par ultralytics.utils.plotting mais seulement
     # dans des fonctions de tracé de courbes, jamais sur le chemin
     # `modifie(img)` -> `boxes`. Vérifié : l'exclusion ne casse ni l'import
