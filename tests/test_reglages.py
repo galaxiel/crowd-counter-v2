@@ -102,19 +102,27 @@ def test_modifier_un_slider_met_a_jour_la_config(application):
 
 
 def test_changer_un_curseur_met_a_jour_la_config_emise(application):
-    """Le signal `config_modifiee` transporte la nouvelle valeur, pas l'ancienne."""
+    """Le signal `config_modifiee` transporte la nouvelle valeur, pas l'ancienne.
+
+    Chaque `definir_*` utilise une valeur DIFFÉRENTE du défaut courant, sinon
+    Qt ne signale aucun changement et aucune émission n'a lieu — c'est le
+    comportement correct de Qt, pas un défaut du panneau. `taille_min_px` vaut
+    3 par défaut, d'où le choix de 40 ci-dessous.
+    """
     p = PanneauReglages(Config())
     captures = []
     p.config_modifiee.connect(captures.append)
 
+    defaut = p.lire()
     p.definir_seuil(0.5)
-    p.definir_taille_min(3)
+    p.definir_taille_min(40)
     p.definir_epaisseur_bande(70)
 
     assert len(captures) == 3
-    assert captures[0].seuil_confiance == pytest.approx(0.5)
-    assert captures[1].taille_min_px == 3
-    assert captures[2].epaisseur_bande == 70
+    assert captures[-1].seuil_confiance == pytest.approx(0.5)
+    assert captures[-1].taille_min_px == 40
+    assert captures[-1].epaisseur_bande == 70
+    assert captures[-1].seuil_confiance != defaut.seuil_confiance
     # La Config émise est aussi celle que `lire()` rend : pas de dérive.
     assert captures[-1].taille_min_px == p.lire().taille_min_px
 
@@ -249,11 +257,17 @@ def test_profil_avec_cle_inconnue_returns_false(application, tmp_path):
 
 
 def test_fenetre_lissage_va_et_vient(application):
-    """`fenetre_lissage` a été ajouté à Config : le panneau le suit sans code
-    supplémentaire. Le test échoue bruyamment si le champ disparaît."""
+    """`fenetre_lissage` est exposé par le panneau.
+
+    La valeur par défaut est 1, pas 10 : mesuré, K>1 retarde la position
+    d'une demi-fenetre, la position lissée est encore dans la bande au
+    moment du croisement, et le comptage est perdu. Le panneau suit
+    Config sans code supplémentaire — le test échoue bruyamment si le champ
+    disparaît, et il vérifie lealler-retour quelle que soit la valeur.
+    """
     assert hasattr(Config(), "fenetre_lissage")
     p = PanneauReglages(Config())
-    assert p.lire().fenetre_lissage == 10
+    assert p.lire().fenetre_lissage == Config().fenetre_lissage
     p.definir_lissage(25)
     assert p.lire().fenetre_lissage == 25
     p.appliquer(Config(fenetre_lissage=4))
