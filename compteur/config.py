@@ -51,11 +51,15 @@ class Config:
     # dernières positions fait ressortir la tendance — le bruit aléatoire
     # s'annule par moyennage, le mouvement constant se cumule.
     # K=1 = mode « brut » : position instantanée, comportement inchangé.
-    # K>1 a été essayé puis retiré : le lissage retarde la position d'une
-    # demi-fenetre, donc au moment où le croisement est détecté la position
-    # lissée est encore dans la bande, `point_du_cote` renvoie 0, le côté de
-    # départ n'est jamais mémorisé et le comptage est perdu. Mesuré : K=5
-    # invalide déjà le franchissement, quelle que soit la vitesse.
+    # K>1 est VOLONTAIREMENT inactif par défaut. Raison mesurée : le lissage
+    # retarde la détection du croisement d'une demi-fenetre, mais le verrou
+    # anti-rebond lit toujours le côté de la position BRUTE. Au moment où le
+    # croisement lissé est détecté, la position brute est déjà passée de
+    # l'autre côté : `_cotes` vaut -1 et `_stabilite` 0, donc le verrou
+    # REJETTE. Mesuré : la marche de référence passe de 1 comptage (K=1) à 0
+    # (K=5, 10, 20). Pour activer K>1, il faut d'abord faire lire
+    # `_cotes`/`_stabilite` à la position lissée elle aussi — voir le rapport
+    # de tâche 6, section 4.4.
     fenetre_lissage: int = 1
 
     def vers_dict(self) -> dict:
