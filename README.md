@@ -20,9 +20,11 @@ density estimation.
 - [Building the executable](#building-the-executable)
 - [Using the software](#using-the-software)
 - [Exporting](#exporting)
+- [Design decisions and scope](#design-decisions-and-scope)
 - [Known limitations](#known-limitations)
 - [Architecture](#architecture)
 - [Tests](#tests)
+- [Further reading](#further-reading)
 
 ---
 
@@ -281,6 +283,62 @@ shown is only valid for the portion you actually checked: it is a
 The default proposed folder is `sortie/`, relative to the current folder —
 that is, `dist\sortie\` when launching the executable.
 
+## Design decisions and scope
+
+### What this is for
+
+Counting the people crossing a virtual line, from a video feed coming from a
+**fixed camera in an elevated position** filming a street. The camera never
+moves. Expected order of magnitude: **200 to 300 people** in total at a
+demonstration, walking past spaced out rather than packed.
+
+### What is deliberately out of scope (v1)
+
+These are not "not yet implemented" — they were considered and ruled out:
+
+- **No person identification, no faces, no recognition.** The counter counts
+  heads. It has no idea who they belong to, and adding that would change the
+  legal and privacy profile entirely.
+- **No multi-camera mode.** One camera, one line.
+- **No web application, server, or API.** The engine is ready for one — see
+  below — but shipping it is a separate decision with different costs.
+- **No densitometry.** This targets a marching flow, not a standing crowd of
+  5,000 people. The two problems look similar and are not: density is
+  estimated from area coverage, which says nothing about how many people walk
+  through a given line.
+- **No model training.** Pre-trained local models only.
+
+### Why a head detector, and why not ByteTrack
+
+The original attempt with a general-purpose "person" detector performed badly
+on demonstration footage: banners and placards broke it, and adjacent people
+merged into a single detection. A **head** detector is far more robust there,
+because a head stays visible above a placard.
+
+That choice is why the default model is `medium.pt`, a SCUT-HEAD trained
+detector.
+
+The tracker went the other way. ByteTrack was tried first and rejected: at
+29 px per head moving 0.69 px per frame, its association was unreliable. A
+plain **IoU tracker** was measured at 0.85 inter-frame overlap and works
+better. That is the opposite of the usual "use the newer, better algorithm"
+instinct — it was chosen because the measurement said so.
+
+### The engine's public contract
+
+```python
+# compteur/compteur.py
+def analyser_video(
+    chemin_video: str,
+    config: Config,
+    callback_frame: Callable[[FrameResult], None] | None = None,
+) -> Resultat
+```
+
+The interface calls this live. The tests call it without a screen. A future
+web API would call it on a video file. Nothing would need rewriting — which
+is the entire reason the engine has no GUI dependency.
+
 ## Known limitations
 
 **Counting returns 0 on some scenes.** This is the most important limitation,
@@ -366,6 +424,15 @@ diverge. Under PyInstaller, this file is embedded and found via `sys._MEIPASS`
 ```bash
 python -m pytest tests/ -v
 ```
+
+## Further reading
+
+- [`docs/design/DESIGN.md`](docs/design/DESIGN.md) — the original design
+  specification: use case, algorithm, engine contract, settings rationale.
+- [`docs/design/IMPLEMENTATION-PLAN.md`](docs/design/IMPLEMENTATION-PLAN.md) —
+  the task-by-task build log (in French). Long, and written as a work journal
+  rather than as documentation; read it only if you want to know *why* a
+  decision was taken, including the ones that were later reversed.
 
 ## Licence
 
