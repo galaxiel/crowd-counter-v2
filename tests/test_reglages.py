@@ -498,6 +498,7 @@ REGLES = (
     "sens",
     "frames_hysteresis",
     "fenetre_lissage",
+    "peripherique",
 )
 
 
