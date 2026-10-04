@@ -19,15 +19,148 @@ from __future__ import annotations
 
 import logging
 import pathlib
+from typing import NamedTuple
 
 import numpy as np
 
-from .config import Config
+from .config import (
+    PERIPHERIQUE_AUTO,
+    PERIPHERIQUE_CPU,
+    PERIPHERIQUE_CUDA,
+    Config,
+    mode_peripherique,
+)
 from .types import Detection
 
 log = logging.getLogger(__name__)
 
 FORMATS_MODELES = (".pt", ".onnx")
+
+#: Valeur passée à ultralytics pour utiliser le GPU.
+DEVICE_CUDA = "cuda:0"
+
+#: Libellé affiché quand aucun GPU n'est utilisé, ou quand aucun GPU n'existe.
+LIBELLE_CPU = "CPU uniquement"
+
+
+class ChoixPeripherique(NamedTuple):
+    """Ce qui sera réellement utilisé, et pourquoi.
+
+    `avertissement` est `None` quand tout va bien. Il n'est pas vide quand
+    l'opérateur a demandé quelque chose que la machine ne peut pas faire : le
+    texte est fait pour être affiché tel quel dans la barre de statut.
+    """
+
+    device: str
+    libelle: str
+    cuda: bool
+    avertissement: str | None = None
+
+
+def cuda_disponible() -> bool:
+    """Vrai si torch voit un GPU utilisable.
+
+    Import de torch PARESSEUX, pour une raison structurelle : le reste du
+    paquet doit rester importable et testable sur une machine sans torch, et
+    `compteur/` ne doit rien importer de lourd au niveau du module.
+
+    On interroge `device_count()` et NON `is_available()`. Mesuré sur cette
+    machine (Windows, torch 2.14.1+cu126, `CUDA_VISIBLE_DEVICES=""`) :
+    `is_available()` renvoie `True` alors que `device_count()` renvoie 0 — le
+    premier lit un état initialisé et mis en cache, le second recompte à
+    chaque appel. Sur un PC sans carte, c'est exactement le genre d'écart qui
+    fait croire à un GPU alors qu'il n'y en a pas, et qui envoie l'opérateur
+    chercher une carte graphique pendant une heure.
+
+    Torch absent n'est pas une panne : il n'y a rien à accélérer, donc le
+    repli CPU est la seule chose possible. En revanche un torch *présent mais
+    cassé* (DLL CUDA manquante) lève : là, dire « CPU uniquement » serait faux,
+    puisque le CPU n'est pas forcément utilisable non plus. On laisse
+    remonter l'erreur.
+    """
+    try:
+        import torch
+    except ImportError:
+        log.warning("torch absent : seul le CPU est envisageable.")
+        return False
+
+    return int(torch.cuda.device_count()) > 0
+
+
+def nom_cuda() -> str:
+    """Nom commercial de la carte, ou chaîne vide si elle est inconnue."""
+    import torch
+
+    try:
+        return str(torch.cuda.get_device_name(0)).strip()
+    except Exception as exc:  # noqa: BLE001 — nom purely informatif
+        log.debug("nom de la carte CUDA illisible : %s", exc)
+        return ""
+
+
+def peripherique_effectif(choisi: str = PERIPHERIQUE_AUTO) -> ChoixPeripherique:
+    """Traduit le réglage `Config.peripherique` en périphérique réellement utilisé.
+
+    Les trois cas, et ce qu'ils produisent :
+
+    - `auto` : CUDA si la machine en a un, CPU sinon. Rien à signaler.
+    - `cuda` : CUDA exigé. Si la machine n'en a pas, on bascule sur le CPU
+      **avec un message** plutôt que de lever. Le choix est assumé : sur le
+      terrain, une analyse quatre fois plus lente mais qui rend un chiffre
+      vaut mieux qu'un plantage, parce que l'opérateur voit la cause affichée
+      et peut décider. Une erreur franche serait plus « propre » en théorie et
+      plus pénible sur le terrain : l'opérateur est devant un laptop qui n'a
+      pas de GPU NVIDIA, pas devant une bibliothèque.
+    - `cpu` : CPU exigé, même avec un GPU présent. Rien à signaler non plus :
+      c'est un choix, pas une privation. Si aucun GPU n'est là, on le dit
+      quand même — « CPU uniquement » n'a pas la même signification selon la
+      machine.
+    """
+    mode = mode_peripherique(choisi)
+    cuda = cuda_disponible()
+
+    if mode == PERIPHERIQUE_CPU:
+        avertissement = None
+        if cuda:
+            avertissement = (
+                "Calcul forcé sur le CPU alors qu'un GPU est disponible : "
+                "l'analyse sera plus lente."
+            )
+        else:
+            avertissement = "Aucun GPU détecté sur cette machine : calcul sur le CPU."
+        return ChoixPeripherique("cpu", LIBELLE_CPU, False, avertissement)
+
+    if mode == PERIPHERIQUE_CUDA and not cuda:
+        return ChoixPeripherique(
+            "cpu",
+            LIBELLE_CPU,
+            False,
+            "Calcul sur GPU demandé, mais aucun GPU CUDA n'est disponible : "
+            "l'analyse bascule sur le CPU, beaucoup plus lentement.",
+        )
+
+    if cuda:
+        nom = nom_cuda()
+        libelle = f"CUDA — {nom}" if nom else "CUDA"
+        return ChoixPeripherique(DEVICE_CUDA, libelle, True, None)
+
+    # Mode auto, aucune carte : c'est le cas normal d'un portable sans GPU.
+    return ChoixPeripherique(
+        "cpu",
+        LIBELLE_CPU,
+        False,
+        "Aucun GPU CUDA détecté : calcul sur le CPU, l'analyse sera très lente.",
+    )
+
+
+def libelle_peripherique(choisi: str = PERIPHERIQUE_AUTO) -> str:
+    """Texte court pour la barre de statut : « Calcul : … ».
+
+    Exposé séparément de `peripherique_effectif` parce que l'interface n'a
+    besoin que du texte, jamais du.device : afficher « cuda:0 » à
+    l'opérateur serait du jargon de développeur.
+    """
+    return f"Calcul : {peripherique_effectif(choisi).libelle}"
 
 
 class Detecteur:
@@ -111,12 +244,16 @@ class Detecteur:
         return {i: str(n) for i, n in enumerate(noms)}
 
 
-def charger_modele(chemin: str):
-    """Charge un modèle YOLO depuis le disque, en privilégiant le GPU.
+def charger_modele(chemin: str, peripherique: str = PERIPHERIQUE_AUTO):
+    """Charge un modèle YOLO depuis le disque, sur le périphérique demandé.
 
     Le chemin est validé *avant* tout import lourd : sur une machine sans
     `torch`, l'erreur promise par l'API (`FileNotFoundError`) doit rester
     celle que l'appelant reçoit, pas un `ModuleNotFoundError`.
+
+    `peripherique` est le réglage de `Config.peripherique` (`auto`, `cuda`,
+    `cpu`). La valeur par défaut est `auto`, ce qui reproduit exactement le
+    comportement historique : CUDA si la machine en a un, CPU sinon.
     """
     p = pathlib.Path(chemin)
     if not p.exists():
@@ -136,8 +273,12 @@ def charger_modele(chemin: str):
     import torch
     from ultralytics import YOLO
 
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    log.info("périphérique de détection : %s", device)
-    if device == "cpu":
-        log.warning("GPU non disponible : l'analyse sera très lente.")
-    return YOLO(str(p))
+    choix = peripherique_effectif(peripherique)
+    if choix.avertissement:
+        log.warning("%s", choix.avertissement)
+    log.info("périphérique de détection : %s", choix.device)
+    modele = YOLO(str(p))
+    # Le device est passé À LA PRÉDICTION, pas au constructeur : `YOLO(...)`
+    # accepte `device=` mais qui l'ignore sur certaines versions, alors que
+    # `.to()` passe par le chemin standard de torch et fonctionne partout.
+    return modele.to(choix.device)

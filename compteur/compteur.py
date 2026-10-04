@@ -298,7 +298,11 @@ def analyser_video(
     import cv2
 
     if detecteur is None:
-        detecteur = Detecteur(charger_modele(config.modele), config)
+        # `peripherique` ne fait qu'indiquer OÙ charger le modèle : la
+        # logique de comptage plus bas est strictement inchangée.
+        detecteur = Detecteur(
+            charger_modele(config.modele, config.peripherique), config
+        )
     if tracker is None:
         tracker = Tracker(config)
 
