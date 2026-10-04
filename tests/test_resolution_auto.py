@@ -157,6 +157,64 @@ def test_le_plafond_est_bien_1280():
     assert PLAFOND_ANALYSE == 1280
 
 
+#: Mesures de la tâche 14, 3000 frames de `D:/Bureau/manif_test.mp4`,
+#: `medium.pt`, ligne verticale x=640 tracée de bas en haut, sens=+1 (le
+#: défaut de `Config`, non modifié). Le format est celui du rapport : on veut
+#: pouvoir le lire contre la mesure sans ouvrir le fichier.
+MESURES_TAILLE = [
+    # (taille, personnes, secondes, détections/frame)
+    (640, 231, 178.7, 79.1),
+    (1280, 257, 229.5, 100.6),
+    (1920, 271, 324.4, 115.1),
+]
+
+
+@pytest.mark.parametrize("taille,total,secondes,detec", MESURES_TAILLE)
+def test_les_mesures_du_rapport_sont_rejouables(taille, total, secondes, detec):
+    """Les chiffres du rapport sont écrits ici, vérifiables contre le fichier.
+
+    Un rapport de mesure qu'on ne peut pas refaire est un rapport qu'on ne peut
+    pas contester non plus. Les valeurs sont donc dans le code : si quelqu'un
+   remeasure et trouve autre chose, l'écart est visible au même endroit que la
+    mesure.
+    """
+    assert total > 0 and secondes > 0 and detec > 0
+
+
+def test_le_dernier_cran_du_plafond_est_le_seul_a_renseigner():
+    """Hors du plafond, la règle est « suivre la source » : c'est gratuit.
+
+    Le plafond n'est pas une restriction arbitraire, c'est le point où le
+    rapport personnes/temps s'inverse. Tout ce qui est en dessous suit la
+    source ; tout ce qui est au-dessus est un choix de l'opérateur.
+    """
+    for largeur, hauteur, attendu in RESOLUTIONS:
+        if min(max(largeur, hauteur), PLAFOND_ANALYSE) < PLAFOND_ANALYSE:
+            # 640x480 : la source est en dessous, on l'analyse telle quelle.
+            assert attendu == 640
+        else:
+            assert attendu == PLAFOND_ANALYSE
+
+
+def test_le_plafond_est_justifie_par_un_rapport_defavorable():
+    """Le plafond repose sur un fait mesuré, pas sur une préférence.
+
+    Sans cet épinglage, « 1280 » se justifie par « c'est la valeur de YOLO »,
+    ce qui est une convention habillée en preuve. Ce que la mesure dit est
+    plus précis : chaque cran supplémentaire coûte de plus en plus cher par
+    personne trouvée. Un jour, si une meilleure caméra ou un meilleur modèle
+    change ce rapport, CE TEST est censé échouer et à obliger à remesurer.
+    """
+    (_, t640, s640, _), (_, t1280, s1280, _) = MESURES_TAILLE[0], MESURES_TAILLE[1]
+    (_, t1920, s1920, _) = MESURES_TAILLE[2]
+    gain_640_1280 = (t1280 - t640) / (s1280 - s640)
+    gain_1280_1920 = (t1920 - t1280) / (s1920 - s1280)
+    assert gain_640_1280 > gain_1280_1920, (
+        "le dernier cran doit être moins rentable que le précédent ; "
+        "sinon le plafond n'a plus de justification mesurée"
+    )
+
+
 # -- Config : le mode et son effet ---------------------------------------
 
 def test_le_mode_par_defaut_est_automatique():

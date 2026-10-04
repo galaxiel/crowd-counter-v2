@@ -56,6 +56,10 @@ QLabel#sous_titre { color: #9ca3af; }
 QLabel#aide_reglage {
     color: #8b929c; font-size: 11px; padding-bottom: 4px;
 }
+/* Titre d'un réglage situé HORS du panneau (la vitesse de présentation, sous
+   la barre de boutons). Même aspect que les autres titres, pour que le
+   curseur ne paraisse pas foreign. */
+QLabel#libelle_reglage { color: #9aa3af; }
 QProgressBar {
     border: 1px solid #2b2f36; border-radius: 4px; text-align: center; height: 18px;
 }

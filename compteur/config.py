@@ -53,13 +53,25 @@ MODE_AUTO = "auto"
 MODE_MANUEL = "manuel"
 MODES_RESOLUTION: tuple[str, ...] = (MODE_AUTO, MODE_MANUEL)
 
-#: Plafond de la résolution d'analyse automatique, en pixels de côté court.
+#: Plafond de la résolution d'analyse automatique, en pixels.
 #:
-#: Au-delà, le coût de calcul explose pour un gain décroissant : YOLO a été
-#: entraîné sur des images de 640, et les objets petits — une tête dans une
-#: foule prise de loin — ne gagnent plus rien à être grossis. La valeur est
-#: confirmée par la mesure (cf. `.superpowers/sdd/.../task-14`), pas par
-#: intuition : 1920 ne change pas le décompte par rapport à 1280.
+#: Le coût marginal devient clairement défavorable au-delà. Mesuré sur 3000
+#: frames de la vidéo de référence (cf. rapport de tâche 14) :
+#:
+#: | taille | compté | temps | détec/frame |
+#: |--------|---------|-------|--------------|
+#: | 640    | 231     | 179 s | 79,1         |
+#: | 1280   | 257     | 230 s | 100,6        |
+#: | 1920   | 271     | 324 s | 115,1        |
+#:
+#: 640 -> 1280 : +26 personnes (+11 %) pour +28 % de temps.
+#: 1280 -> 1920 : +14 personnes (+5 %) pour +41 % de temps.
+#:
+#: 1920 n'est donc PAS inutile : c'est ce que la mesure dit, et elle a été
+#: faits pour trancher. Mais le dernier cran coûte deux fois plus cher que le
+#: précédent pour deux fois moins de gain, sur une vidéo dont la source est
+#: déjà en 1280. C'est le coût d'un détail, pas d'une erreur : l'opérateur
+#: qui monte en mode manuel paie ce supplément en connaissance de cause.
 PLAFOND_ANALYSE = 1280
 
 #: Résolution d'analyse retenue quand la vidéo ne dit pas la sienne.
@@ -92,15 +104,19 @@ def taille_entree_automatique(largeur: int, hauteur: int) -> int:
     """Résolution d'analyse d'une vidéo de `largeur` x `hauteur`, en pixels.
 
     La règle est « la résolution native de la vidéo, plafonnée à
-    `PLAFOND_ANALYSE` », et elle est MESURÉE, pas supposée (cf. le rapport de
-    tâche 14) :
+    `PLAFOND_ANALYSE` », et le plafond est MESURÉ (rapport de tâche 14) :
 
-    | vidéo        | analyse à |
-    |--------------|-----------|
-    | 640 x 480    | 640       |
-    | 1280 x 720   | 1280      |
-    | 1920 x 1080  | 1280      |
-    | 3840 x 2160  | 1280      |
+    | vidéo        | analyse à | justification |
+    |--------------|-----------|---------------|
+    | 640 x 480    | 640       | sous le plafond, on suit la source |
+    | 1280 x 720   | 1280      | +11 % de personnes pour +28 % de temps |
+    | 1920 x 1080  | 1280      | +5 % de personnes pour +41 % de temps |
+    | 3840 x 2160  | 1280      | même source, coût encore plus lourd |
+
+    Le plafond à 1280 ne pretend pas que 1920 est inutile : 1920 trouve bien
+    14 personnes de plus (271 contre 257 sur 3000 frames). Il dit que ce cran
+    coûte 41 % de temps de calcul supplémentaire pour 5 % de personnes, et
+    qu'au-delà le rapport se dégrade encore.
 
     **Pourquoi le côté le plus grand, et non la largeur.** `imgsz` vaut pour
     le côté le plus LONG de l'image : c'est lui qu'ultralytics aligne sur la

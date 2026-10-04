@@ -237,8 +237,8 @@ class FenetrePrincipale(QMainWindow):
             ["0.25×", "0.5×", "1×", "2×", "4×", VITESSE_MAX]
         )
         self.choix_vitesse.setCurrentText(VITESSE_PAR_DEFAUT)
-        # L'explication vit dans `AIDE`, avec les 12 autres réglages : une
-        # seule source de vérité, et des tests qui la couvrent sans duplication.
+        # L'explication vit dans `AIDE`, avec les autres réglages : une seule
+        # source de vérité, et des tests qui la couvrent sans duplication.
         aide_vitesse = AIDE["vitesse_presentation"]
         self.etiquette_vitesse.setToolTip(aide_vitesse)
         self.choix_vitesse.setToolTip(aide_vitesse)
