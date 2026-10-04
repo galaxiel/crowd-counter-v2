@@ -49,8 +49,17 @@ from PySide6.QtWidgets import (
 )
 
 from compteur.compteur import Compteur
-from compteur.config import MODE_MANUEL, Config, mode_resolution
-from compteur.detecteur import Detecteur, charger_modele
+from compteur.config import (
+    MODE_MANUEL,
+    Config,
+    mode_peripherique,
+    mode_resolution,
+)
+from compteur.detecteur import (
+    Detecteur,
+    charger_modele,
+    peripherique_effectif,
+)
 from compteur.ligne import Ligne
 from compteur.tracker import Tracker
 from interface.overlay import dessiner
@@ -169,6 +178,21 @@ class FenetrePrincipale(QMainWindow):
         self.label_details.setAlignment(Qt.AlignmentFlag.AlignCenter)
         colonne.addWidget(self.label_details)
 
+        # Le périphérique de calcul est affiché EN PERMANENCE, dans son PROPRE
+        # label et non dans `label_statut`.
+        #
+        # `label_statut` est écrasé à chaque changement d'état (vidéo chargée,
+        # analyse en cours, pause, erreur) : un indicateur de calcul mis là
+        # disparaîtrait précisément quand l'opérateur en a le plus besoin. Un
+        # label dédié n'est jamais réécrit, donc l'information est toujours là.
+        # Il est placé SOUS le compteur et au-dessus de la barre de statut, et
+        # jamais à côté du chiffre : le compteur reste libre pour le résultat.
+        self.label_peripherique = QLabel()
+        self.label_peripherique.setObjectName("sous_titre")
+        self.label_peripherique.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._maj_peripherique()
+        colonne.addWidget(self.label_peripherique)
+
         self.label_statut = QLabel("Charge une vidéo pour commencer.")
         self.label_statut.setObjectName("sous_titre")
         self.label_statut.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -266,6 +290,35 @@ class FenetrePrincipale(QMainWindow):
         self.choix_vitesse.currentTextChanged.connect(self._appliquer_vitesse)
         self._timer_traitement.timeout.connect(self._tick)
         self._timer_affichage.timeout.connect(self._afficher)
+
+    def _maj_peripherique(self, config: Config | None = None) -> None:
+        """Recalcule et affiche « Calcul : CUDA — … » ou « Calcul : CPU … ».
+
+        L'opérateur a cherché à confirmer le GPU avec le gestionnaire de
+        performances sans y arriver ; la réponse doit donc être à l'écran, en
+        permanence, et nommer la carte quand elle existe.
+
+        L'avertissement éventuel (GPU demandé mais absent, CPU forcé avec un
+        GPU présent) part dans le JOURNAL et non dans le label : un encart de
+        deux lignes ici remplacerait le compteur, et l'opérateur n'a rien à
+        faire de l'information une fois qu'il l'a lue — sauf changer le
+        réglage, ce que le menu « Périphérique de calcul » permet déjà.
+        """
+        config = config or getattr(self, "config", None) or Config.defauts()
+        mode = mode_peripherique(getattr(config, "peripherique", "auto"))
+        choix = peripherique_effectif(mode)
+        if choix.avertissement:
+            log.warning("%s", choix.avertissement)
+        self.label_peripherique.setText(f"Calcul : {choix.libelle}")
+        self._peripherique_effectif = choix
+
+    def device_effectif(self) -> str:
+        """Périphérique réellement utilisé, au format attendu par torch.
+
+        Exposé pour que les tests vérifient leTexte affiché ET la valeur qui
+        part dans `charger_modele` : les deux doivent parler du même matériel.
+        """
+        return self._peripherique_effectif.device
 
     # -- Boîtes de dialogue ----------------------------------------------
 
@@ -550,6 +603,20 @@ class FenetrePrincipale(QMainWindow):
           détecteur est lâché. Le conserver compterait avec l'ancien modèle
           pendant que l'écran annonce le nouveau.
         """
+        # Le périphérique se met à jour AVANT l'affectation de `self.config` :
+        # la comparaison ci-dessous porte sur l'ANCIEN réglage, donc elle doit
+        # être faite avant que la référence ne soit écrasée. Écraser d'abord
+        # rendrait tout changement invisible — et l'indicateur afficherait le
+        # périphérique précédent, ce qui est le mensonge exact que cet
+        # indicateur sert à éviter.
+        peripherique_change = (
+            mode_peripherique(getattr(config, "peripherique", "auto"))
+            != mode_peripherique(getattr(self.config, "peripherique", "auto"))
+        )
+        if peripherique_change:
+            log.info("périphérique de calcul : %s", getattr(config, "peripherique", "auto"))
+            self._maj_peripherique(config)
+
         self.config = config
         if self.ligne is not None:
             try:
@@ -567,6 +634,8 @@ class FenetrePrincipale(QMainWindow):
                 log.warning("réglage de ligne refusé : %s", exc)
         if self.compteur is not None:
             self.compteur.config = config
+        # Un changement de périphérique lâche le détecteur comme un changement
+        # de modèle : le device entre dans `charger_modele`.
         if self.detecteur is not None:
             if config.modele and config.modele != self._modele_charge:
                 log.info("modèle changé (%s -> %s)", self._modele_charge, config.modele)
@@ -577,6 +646,22 @@ class FenetrePrincipale(QMainWindow):
                     self.label_statut.setText(
                         "Modèle changé : l'analyse en cours va s'arrêter. "
                         "Relance pour l'appliquer."
+                    )
+                    self.arreter()
+            elif peripherique_change:
+                # Un modèle déjà monté reste sur son périphérique d'origine :
+                # `Detecteur` ne déplace pas le modèle à chaud. Le lâcher est
+                # donc obligatoire, sinon l'écran annoncerait « CPU » pendant
+                # que l'analyse tourne encore sur le GPU — l'inverse exact du
+                # problème que cet indicateur sert à résoudre.
+                log.info("périphérique changé : rechargement du modèle nécessaire.")
+                self.detecteur = None
+                self.tracker = None
+                self._modele_charge = ""
+                if self._en_analyse:
+                    self.label_statut.setText(
+                        "Périphérique de calcul changé : l'analyse en cours va "
+                        "s'arrêter. Relance pour l'appliquer."
                     )
                     self.arreter()
             else:
@@ -601,7 +686,8 @@ class FenetrePrincipale(QMainWindow):
             if self.detecteur is None:
                 log.info("chargement du modèle %s", self.config.modele)
                 self.detecteur = Detecteur(
-                    charger_modele(self.config.modele), self.config
+                    charger_modele(self.config.modele, self.config.peripherique),
+                    self.config,
                 )
                 self._modele_charge = self.config.modele
             if self.tracker is None:

@@ -43,7 +43,11 @@ from PySide6.QtWidgets import (
 from compteur.config import (
     MODE_AUTO,
     MODE_MANUEL,
+    PERIPHERIQUE_AUTO,
+    PERIPHERIQUE_CPU,
+    PERIPHERIQUE_CUDA,
     Config,
+    mode_peripherique,
     mode_resolution,
     taille_entree_automatique,
 )
@@ -85,6 +89,17 @@ TAILLES_ENTREE: tuple[int, ...] = (320, 640, 1280)
 CHOIX_RESOLUTION_ANALYSE: tuple[tuple[str, str], ...] = (
     ("Automatique (recommandé)", MODE_AUTO),
     ("Manuelle", MODE_MANUEL),
+)
+
+#: Choix de « Calcul sur », `(libellé affiché, mode stocké)`.
+#:
+#: Même contrat que `CHOIX_RESOLUTION_ANALYSE` : le mode stocké est un
+#: identifiant sans accent qui voyage dans les profils, le libellé porte la
+#: consequence — c'est ce que l'opérateur doit lire avant de choisir.
+CHOIX_PERIPHERIQUE: tuple[tuple[str, str], ...] = (
+    ("Automatique (recommandé)", PERIPHERIQUE_AUTO),
+    ("GPU NVIDIA (CUDA)", PERIPHERIQUE_CUDA),
+    ("CPU uniquement", PERIPHERIQUE_CPU),
 )
 
 #: Repli tant que `Config.fenetre_lissage` n'existe pas (tâche parallèle).
@@ -181,6 +196,26 @@ AIDE: dict[str, str] = {
         "Manuelle seulement si tu connais le matériel et sais ce que tu "
         "fais : dans ce cas, monte aussi haut que la source le permet, la "
         "couche supplémentaire étant à ta charge."
+    ),
+    "peripherique": (
+        "Calcul sur — le processeur qui fait la détection.\n\n"
+        "Ce que ça fait : décide si le modèle YOLO tourne sur le GPU NVIDIA ou "
+        "sur le processeur. Le choix ne change PAS le décompte : la même scène "
+        "est analysée dans les deux cas. Le périphérique réellement utilisé est "
+        "écrit en permanence dans la barre de statut, sous le compteur.\n"
+        "Ce que ça change : uniquement la vitesse. « Automatique » prend le GPU "
+        "s'il y en a un, le CPU sinon. « GPU NVIDIA (CUDA) » EXIGE le GPU : sur "
+        "une machine sans carte NVIDIA, l'analyse bascule quand même sur le CPU "
+        "et te le dit, parce qu'un plantage sur le terrain coûte plus cher "
+        "qu'une analyse lente qu'on peut au moins regarder. « CPU uniquement » "
+        "force le processeur même quand un GPU est présent : c'est le remède "
+        "quand le GPU plante sur une scène particulière.\n"
+        "Valeur conseillée : Automatique, le réglage par défaut. Mesuré sur "
+        "cette machine : environ 27 images/s en CUDA contre 7 img/s en CPU, "
+        "soit une vidéo de 4 minutes analysée en ~9 minutes sur le GPU et "
+        "~35 minutes sur le processeur. Le CPU n'est donc acceptable que pour "
+        "un dépannage ou une toute courte vidéo ; passe en Automatique dès que "
+        "c'est possible."
     ),
     "frames_confirmation": (
         "Frames de confirmation.\n\n"
@@ -384,6 +419,7 @@ class PanneauReglages(QWidget):
         racine.addWidget(self._groupe_tracker(config))
         racine.addWidget(self._groupe_ligne(config))
         racine.addWidget(self._groupe_lissage(config))
+        racine.addWidget(self._groupe_peripherique(config))
         racine.addWidget(self._groupe_profils())
         racine.addStretch(1)
 
@@ -620,6 +656,35 @@ class PanneauReglages(QWidget):
         )
         return g
 
+    def _groupe_peripherique(self, c: Config) -> QGroupBox:
+        """Choix du processeur de détection.
+
+        Groupe à part entière, et non une ligne de plus dans « Détection » :
+        ce n'est pas un réglage de la détection mais du MATÉRIEL qui la porte,
+        et sa consequence (un facteur quatre sur la vitesse) est d'une autre
+        nature que celle des seuils. L'opérateur doit pouvoir le retrouver —
+        et le comprendre même après un plantage du GPU — sans le confondre avec
+        un seuil qu'il aurait mal réglé.
+        """
+        g = QGroupBox("Périphérique de calcul")
+        v = QVBoxLayout(g)
+        self._peripherique = QComboBox()
+        for libelle, _mode in CHOIX_PERIPHERIQUE:
+            self._peripherique.addItem(libelle)
+        self._peripherique.setCurrentIndex(
+            max(
+                0,
+                [m for _, m in CHOIX_PERIPHERIQUE].index(
+                    mode_peripherique(getattr(c, "peripherique", PERIPHERIQUE_AUTO))
+                ),
+            )
+        )
+        self._peripherique.currentIndexChanged.connect(self._emettre)
+        self._poser(
+            v, "peripherique", "Calcul sur", self._peripherique
+        )
+        return g
+
     def _groupe_profils(self) -> QGroupBox:
         g = QGroupBox("Profils")
         h = QVBoxLayout(g)
@@ -679,7 +744,22 @@ class PanneauReglages(QWidget):
         c.frames_hysteresis = self._hysteresis.value()
         if hasattr(c, "fenetre_lissage"):
             setattr(c, "fenetre_lissage", self._lissage.value())
+        if hasattr(self, "_peripherique"):
+            c.peripherique = mode_peripherique(self._mode_peripherique())
         return c
+
+    def _mode_peripherique(self) -> str:
+        """Mode de périphérique actuellement sélectionné.
+
+        Même règle que `_mode_resolution` : le menu porte le MODE, jamais
+        l'indice, pour que réordonner `CHOIX_PERIPHERIQUE` ne puisse pas
+        retourner silencieusement un autre mode que celui affiché.
+        """
+        index = self._peripherique.currentIndex()
+        modes = [m for _, m in CHOIX_PERIPHERIQUE]
+        if 0 <= index < len(modes):
+            return modes[index]
+        return PERIPHERIQUE_AUTO
 
     # -- Réglages ponctuels (tests, raccourcis clavier) -------------------
 
@@ -744,6 +824,17 @@ class PanneauReglages(QWidget):
             self._lissage.setValue(
                 int(getattr(config, "fenetre_lissage", FENETRE_LISSAGE_DEFAUT))
             )
+            if hasattr(self, "_peripherique"):
+                self._peripherique.setCurrentIndex(
+                    max(
+                        0,
+                        [m for _, m in CHOIX_PERIPHERIQUE].index(
+                            mode_peripherique(
+                                getattr(config, "peripherique", PERIPHERIQUE_AUTO)
+                            )
+                        ),
+                    )
+                )
             self._maj_etiquette_seuil()
             self._maj_activite_taille_entree()
         finally:
@@ -880,6 +971,18 @@ class PanneauReglages(QWidget):
         """
         manuel = self._mode_resolution() == MODE_MANUEL
         self._taille_entree.setEnabled(manuel)
+
+    def definir_peripherique(self, mode: str) -> None:
+        """Sélectionne un mode de périphérique (raccourci et tests).
+
+        Le menu reste la voie normale : cette méthode existe pour qu'un test
+        n'ait pas à énumérer les choix, ce qui casse silencieusement dès que
+        l'ordre du menu change.
+        """
+        cible = mode_peripherique(mode)
+        index = [m for _, m in CHOIX_PERIPHERIQUE].index(cible)
+        if self._peripherique.currentIndex() != index:
+            self._peripherique.setCurrentIndex(index)
 
     def definir_resolution_manuelle(self, manuel: bool = True) -> None:
         """Bascule le mode de résolution d'analyse (raccourci et tests).
