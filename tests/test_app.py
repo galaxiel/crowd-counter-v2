@@ -427,7 +427,9 @@ def test_compteur_se_met_a_jour(application):
     assert f.presents == 7
     assert f.frames == 100
     assert f.label_compteur.text() == "42"
-    assert "7" in f.label_details.text()
+    # Les compteurs de « présents » et de « frames » ne sont PLUS affichés :
+    # les valeurs restent enregistrées ci-dessus, seul le libellé a disparu.
+    assert not hasattr(f, "label_details")
 
 
 def test_compteur_affiche_les_chiffres_en_entier(application, fenetre):

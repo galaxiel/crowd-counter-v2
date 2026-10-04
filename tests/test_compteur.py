@@ -62,12 +62,23 @@ class FauxTracker:
 
 
 class FauxDetecteur:
-    """Bouchon : le faux tracker ignore les détections et joue son script."""
+    """Bouchon : le faux tracker ignore les détections et joue son script.
+
+    `detecter` accepte le second argument `bande` que le `Compteur` fait
+    désormais passer (le rectangle de détection). Le paramètre est nommé mais
+    volontairement INUTILISÉ ici : ce test éprouve la machine à états du
+    comptage, et la bande est une affaire de géométrie, éprouvée dans
+    `test_bande_detection.py`.
+    """
 
     def __init__(self):
         self.config = None
+        #: Dernier rectangle reçu, pour qu'un test puisse observer ce que le
+        #: compteur demande au détecteur.
+        self.bandes_recues = []
 
-    def detecter(self, img):
+    def detecter(self, img, bande=None):
+        self.bandes_recues.append(bande)
         return []
 
 
@@ -252,10 +263,13 @@ def test_purge_des_registres_quand_le_tracker_perd_un_track():
     Sans purge, `_cotes` et `_stabilite` grossiraient sans borne sur une vidéo
     longue : une entrée par personne jamais revue.
     """
-    scenario = marche(1, REFERENCE) + [[]]
+    # Marche qui s'arrête AVANT la ligne : ce test éprouve la purge due à la
+    # PERTE DU TRACK par le tracker. Une marche qui franchirait la ligne aurait
+    # déjà été purgée par l'abandon post-ligne, et le test ne prouverait plus
+    # ce qu'il dit.
+    scenario = marche(1, [100.0, 200.0, 250.0, 280.0])
     c = compteur(scenario, epaisseur_bande=20, frames_hysteresis=2)
-    jouer(c, len(REFERENCE))
-    assert c.total == 1
+    jouer(c, 4)
     assert c._derniers_centers and c._cotes and c._stabilite
 
     r = c.traiter_frame(image(), len(REFERENCE), 0.28)

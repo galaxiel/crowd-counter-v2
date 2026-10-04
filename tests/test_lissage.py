@@ -55,7 +55,7 @@ class FauxTracker:
 class FauxDetecteur:
     config = None
 
-    def detecter(self, img):
+    def detecter(self, img, bande=None):
         return []
 
 
@@ -312,13 +312,18 @@ def test_track_revenu_apres_une_occlusion_na_pas_de_position_lissee_aberrante():
     Sans purge de l'historique, la moyenne des K positions porterait sur des
     frames où la personne était ailleurs : la position lissée de son retour
     serait un mélange de deux lieux, et pourrait fabriquer un franchissement.
+
+    Le retour se fait du MÊME côté que le départ (x=50, à gauche d'une ligne
+    en x=320) : de l'autre côté, le track serait de toute façon abandonné par
+    la purge post-ligne, et le test ne vérifierait plus la purge d'occlusion
+    qu'il vise.
     """
-    xs = [[t(1, 100.0)], [t(1, 105.0)], [], [], [t(1, 600.0)]]
+    xs = [[t(1, 100.0)], [t(1, 105.0)], [], [], [t(1, 50.0)]]
     c = compteur(xs, epaisseur_bande=20, fenetre_lissage=10)
     for i in range(len(xs)):
         c.traiter_frame(image(), i, i * 0.04)
     assert len(c._historiques[1]) == 1, "l'historique aurait dû être purgé"
-    assert c._derniers_centers[1][0] == pytest.approx(600.0)
+    assert c._derniers_centers[1][0] == pytest.approx(50.0)
 
 
 def test_purge_des_historiques_avec_les_autres_registres():
@@ -404,7 +409,7 @@ def test_un_bruit_seul_compte_moins_avec_le_lissage():
     def compter_les_tracks(k):
         c = compteur([], epaisseur_bande=20, frames_hysteresis=2, fenetre_lissage=k)
         # On pilote le faux tracker frame par frame, 30 tracks simultanés.
-        c.detecteur.detecter = lambda img: []
+        c.detecteur.detecter = lambda img, bande=None: []
         for f in range(200):
             c.tracker.mettre_a_jour = lambda detections, frame_index, f=f: [
                 t(i + 1, personnes[i][f]) for i in range(30)
@@ -442,6 +447,10 @@ def test_lissage_reste_rapide_avec_des_milliers_de_tracks():
     duree = time.perf_counter() - depart
 
     assert duree < 1.0, f"{n_frames} frames x {n_tracks} tracks en {duree:.3f}s"
-    # La mémoire reste bornée : n_tracks x K positions, rien de plus.
-    assert len(c._historiques) == n_tracks
+    # La mémoire reste bornée : n_tracks x K positions, rien de plus. La borne
+    # est un « au plus » et non une égalité : les tracks passés du côté de
+    # l'arrivée sont abandonnés en cours de route (côté x > 320 pour cette
+    # scène), donc moins de 2000 survivent à la fin. Ce qui est éprouvé ici,
+    # c'est l'absence de croissance — pas le nombre exact de survivants.
+    assert len(c._historiques) <= n_tracks
     assert all(len(h) <= 10 for h in c._historiques.values())

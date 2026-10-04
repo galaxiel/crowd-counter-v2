@@ -54,6 +54,13 @@ def dessiner(
     """
     sortie = _copie_de_travail(img)
 
+    # Le voile d'abord, sur l'image NUE. L'ordre est tout : assombri après les
+    # boîtes, il les aplatit avec le reste et l'opérateur ne voit plus ce que le
+    # modèle a trouvé. C'est la bande de DÉTECTION qui est ainsi mise en
+    # évidence — pas la bande de franchissement, plus étroite.
+    if ligne is not None:
+        sortie = ligne.voiler(sortie)
+
     for d in getattr(resultat, "detections", None) or []:
         _boite(sortie, d.x1, d.y1, d.x2, d.y2, COULEUR_BOITE)
 

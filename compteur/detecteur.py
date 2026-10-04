@@ -173,13 +173,51 @@ class Detecteur:
     appliqués ici même si le modèle est déjà paramétré pour le seuil : c'est
     la seule garantie que la valeur de `Config` fait autorité, quel que soit
     le modèle fourni.
+
+    **Ce module ne connaît pas la ligne de comptage.** Il ne fait qu'appliquer
+    un rectangle qu'on lui fournit — voir `detecter`. C'est le `Compteur`, qui
+    possède la ligne, qui décide de la bande ; il n'a qu'à la geometrie, jamais
+    d'affichage.
     """
 
     def __init__(self, modele, config: Config) -> None:
         self.modele = modele
         self.config = config
 
-    def detecter(self, img: np.ndarray) -> list[Detection]:
+    def detecter(
+        self, img: np.ndarray, bande: tuple[int, int, int, int] | None = None
+    ) -> list[Detection]:
+        """Boîtes de `img`, éventuellement restreintes à `bande`.
+
+        `bande` est un rectangle ``(x1, y1, x2, y2)`` en pixels de l'image
+        NATIVE, ou `None` pour analyser l'image entière. `None` est aussi ce
+        qui est renvoyé si la bande déborde entièrement de l'image : on
+        analyse alors tout, ce qui est plus sûr qu'une coupe vide.
+
+        **Le rognage se fait ici, sur l'image native, AVANT la redimension
+        pour le modèle.** C'est le seul endroit où il coûte quelque chose : la
+        copie numpy est faite une fois, sur la frame telle qu'elle sort de la
+        vidéo. Rogner après la mise à l'échelle `imgsz` reviendrait à
+        redimensionner toute l'image puis à jeter 80 % du résultat — le même
+        travail, aucun gain.
+
+        **Les coordonnées sont ramenées dans le repère de l'image pleine.** Le
+        modèle ne connaît que la bande : ses boîtes sont décalées vers 0. Sans
+        la correction ci-dessous, le tracker verrait toutes les personnes
+        ramassées contre x=0 et le compteur les ferait passer à côté de la
+        ligne — un décompte faux, sans le moindre signe à l'écran puisque
+        l'affichage se fait lui aussi en coordonnées d'image pleine.
+        """
+        decalage_x = decalage_y = 0
+        if bande is not None:
+            x1, y1, x2, y2 = (int(v) for v in bande)
+            # `copy()` : la coupe doit être CONTIGUË. Un slicing numpy est une
+            # vue avec un stride, et OpenCV refuse — ou pire, lit de travers —
+            # un buffer non contigu. La copie est faite une fois par frame,
+            # quelques dizaines de kilo-octets : négligeable devant le calcul.
+            img = np.ascontiguousarray(img[y1:y2, x1:x2])
+            decalage_x, decalage_y = x1, y1
+
         results = self.modele(
             img,
             conf=self.config.seuil_confiance,
@@ -196,7 +234,7 @@ class Detecteur:
         for coords, score, class_id in zip(
             boites.xyxy.tolist(), boites.conf.tolist(), boites.cls.tolist()
         ):
-            x1, y1, x2, y2 = coords
+            bx1, by1, bx2, by2 = coords
             class_id = int(class_id)
             score = float(score)
 
@@ -207,18 +245,18 @@ class Detecteur:
                 and class_id not in self.config.classes_retenues
             ):
                 continue
-            largeur = x2 - x1
-            hauteur = y2 - y1
+            largeur = bx2 - bx1
+            hauteur = by2 - by1
             mini = self.config.taille_min_px
             if largeur < mini or hauteur < mini:
                 continue
 
             detections.append(
                 Detection(
-                    x1=float(x1),
-                    y1=float(y1),
-                    x2=float(x2),
-                    y2=float(y2),
+                    x1=float(bx1) + decalage_x,
+                    y1=float(by1) + decalage_y,
+                    x2=float(bx2) + decalage_x,
+                    y2=float(by2) + decalage_y,
                     score=score,
                     class_id=class_id,
                 )

@@ -96,6 +96,36 @@ PERIPHERIQUES: tuple[str, ...] = (
 #: qui monte en mode manuel paie ce supplément en connaissance de cause.
 PLAFOND_ANALYSE = 1280
 
+#: Largeur de la BANDE DE DÉTECTION, en pixels de l'image native.
+#:
+#: Le modèle ne tourne pas sur l'image entière mais sur une bande de cette
+#: largeur centrée sur la ligne de comptage. Mesuré sur 3000 frames de la vidéo
+#: de référence (ligne verticale x=640, `sens=-1`, `imgsz=640`) :
+#:
+#: | bande  | détections/frame | compté |
+#: |--------|------------------|--------|
+#: | entière | 79,1            | 231    |
+#: | 200 px  | 13,2            | 256    |
+#: | 300 px  | 20,3            | 254    |
+#: | 600 px  | 42,2            | 258    |
+#:
+#: Le motif est stable de 200 à 600 px : le gain vient de la restriction
+#: elle-même, pas d'une largeur particulière. On retient donc la plus étroite,
+#: la plus rapide. **Ce n'est PAS un compromis précision/vitesse** : le gain est
+#: des deux côtés. Hors bande, le tracker s'efforce d'associer des dizaines de
+#: plusieurs personnes qui se gênent entre elles (boîtes fusionnées, identités
+#: qui permutent) ; en ne gardant que celles qui approchent de la ligne, il suit
+#: moins de cibles mais il les suit bien.
+#:
+#: La bande ne fait PAS gagner de temps de calcul (71 à 76 s quelle que soit la
+#: largeur) : le goulot est ailleurs. Ce n'est pas une optimisation de débit.
+BANDE_DETECTION_PX = 200
+
+#: Facteur d'assombrissement appliqué HORS de la bande de détection, à
+#: l'affichage uniquement. L'image reste lisible : c'est un voile, pas un
+#: masque. 0,6 = 40 % d'assombrissement.
+FACTEUR_VOILE = 0.6
+
 #: Résolution d'analyse retenue quand la vidéo ne dit pas la sienne.
 #:
 #: Une `VideoCapture` qui ne répond pas sur `CAP_PROP_FRAME_WIDTH` (conteneur

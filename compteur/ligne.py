@@ -11,6 +11,8 @@ import math
 
 import numpy as np
 
+from .config import BANDE_DETECTION_PX, FACTEUR_VOILE
+
 #: Orientation d'une ligne, telle que l'interface la nomme.
 #:
 #: Elle est déduite de l'axe DOMINANT du segment p1 -> p2, jamais d'un réglage :
@@ -64,6 +66,7 @@ class Ligne:
         epaisseur: int = 30,
         sens: int = 1,
         hysteresis: int = 2,
+        bande_detection_px: int | None = None,
     ) -> None:
         p1 = (float(p1[0]), float(p1[1]))
         p2 = (float(p2[0]), float(p2[1]))
@@ -76,20 +79,47 @@ class Ligne:
             raise ValueError("l'épaisseur doit être >= 1")
         if hysteresis < 0:
             raise ValueError("l'hystérésis doit être >= 0")
+        if bande_detection_px is not None and bande_detection_px < 1:
+            raise ValueError("la bande de détection doit faire >= 1 px")
 
         self.p1 = p1
         self.p2 = p2
         self.epaisseur = int(epaisseur)
         self.sens = int(sens)
-        # Valide et expose pour la tache 5 (anti-rebond du comptage) qui le lit
+        # Valide et exposé pour la tache 5 (anti-rebond du comptage) qui le lit
         # via ligne.hysteresis ; la geometrie de ce module ne s'en sert pas.
         self.hysteresis = int(hysteresis)
+        # Largeur de la bande sur laquelle le modèle est appliqué, en pixels de
+        # l'image native. PAS un réglage séparé : c'est un attribut de la ligne,
+        # elle se déplace donc AVEC elle et ne peut pas en être détachée.
+        # `None` signifie « pas de bande » : le modèle voit l'image entière.
+        self.bande_detection_px = (
+            None if bande_detection_px is None else int(bande_detection_px)
+        )
+        # Verrou de l'opérateur : une fois l'analyse lancée, la ligne et sa
+        # bande cessent de bouger. Sans cela, un réglage glissé pendant la
+        # lecture déplacerait la zone de comptage sous les yeux de celui qui
+        # regarde, et le décompte afficherait deux zones différentes dans la
+        # même vidéo.
+        self.verrouillee = False
+        self._recalculer_geometrie()
 
+    def _recalculer_geometrie(self) -> None:
+        """Recalcule les vecteurs dérivés de ``p1``/``p2``.
+
+        Isolé du constructeur parce que `deplacer` doit produire exactement la
+        même géométrie : c'est le seul moyen de garantir qu'une ligne
+        reconstruite et une ligne déplacée ne divergent pas sur un cas limite.
+        """
+        longueur = math.hypot(self.p2[0] - self.p1[0], self.p2[1] - self.p1[1])
         # Direction le long de la ligne, puis normale (perpendiculaire).
-        self._d = ((p2[0] - p1[0]) / longueur, (p2[1] - p1[1]) / longueur)
+        self._d = (
+            (self.p2[0] - self.p1[0]) / longueur,
+            (self.p2[1] - self.p1[1]) / longueur,
+        )
         self._n = (-self._d[1], self._d[0])
-        # Le signe de la normale estChoisi par `sens`, mais ce n'est PAS pour
-        # autant le sens de comptage : il sert a distinguer les deux cotes.
+        # Le signe de la normale est choisi par `sens`, mais ce n'est PAS pour
+        # autant le sens de comptage : il sert à distinguer les deux côtés.
         if self.sens < 0:
             self._n = (-self._n[0], -self._n[1])
         # Direction effectivement comptée. a_traverse retient le passage
@@ -97,6 +127,102 @@ class Ligne:
         # opposé à _n quand sens=+1. Exposer cet invariant évite que la
         # flèche et l'interface se trompent de sens.
         self.sens_traversee = (-self._n[0], -self._n[1])
+
+    def deplacer(self, p1, p2) -> bool:
+        """Déplace la ligne — et sa bande avec elle, par construction.
+
+        La bande n'est pas une coordonnée stockée mais une grandeur DÉRIVÉE de
+        ``p1``/``p2`` (voir `rect_bande_detection`) : elle ne peut pas être
+        désolidarisée de la ligne. Déplacer la ligne déplace la bande ; voilà
+        ce que « un seul objet » veut dire.
+
+        Renvoie `False` sans rien changer si la ligne est verrouillée, ou si
+        les deux points sont confondus. Le verrou et la validité sont testés
+        AVANT toute écriture : un déplacement refusé ne doit pas laisser une
+        ligne à moitié déplacée.
+        """
+        if self.verrouillee:
+            return False
+        q1 = (float(p1[0]), float(p1[1]))
+        q2 = (float(p2[0]), float(p2[1]))
+        if math.hypot(q2[0] - q1[0], q2[1] - q1[1]) < 1e-6:
+            return False
+        self.p1 = q1
+        self.p2 = q2
+        self._recalculer_geometrie()
+        return True
+
+    def verrouiller(self) -> None:
+        """Fige la ligne et sa bande pour la durée de l'analyse."""
+        self.verrouillee = True
+
+    def deverrouiller(self) -> None:
+        """Libre la ligne : l'opérateur peut la retracer."""
+        self.verrouillee = False
+
+    # -- Bande de détection -----------------------------------------------
+
+    def rect_bande_detection(
+        self, largeur_image: int, hauteur_image: int
+    ) -> tuple[int, int, int, int] | None:
+        """Rectangle ``(x1, y1, x2, y2)`` de la bande, en pixels de l'image.
+
+        `None` signifie « pas de bande » : le modèle voit l'image entière.
+
+        **C'est ici que se décide le rognage, et la décision est géométrique,
+        pas graphique.** `compteur.detecteur` ne sait pas ce qu'est une ligne ;
+        il reçoit un rectangle. Cette séparation est vérifiée par un test
+        d'isolation.
+
+        La bande fait `bande_detection_px` pixels AU TOTAL, centrés sur la
+        ligne : de ``x_ligne - 100`` à ``x_ligne + 100`` pour une ligne
+        verticale. Elle est orientée par la NORMALE, donc elle suit une ligne
+        diagonale aussi bien qu'une verticale — c'est le rectangle englobant
+        qui sert au rognage, plus grand que la bande elle-même sur une
+        diagonale. Compromis assumé : un rognage d'image est droit, il ne peut
+        pas être oblique ; on rogne donc le rectangle qui CONTIENT la bande,
+        jamais moins.
+
+        **Rogne, ne déborde pas.** Chaque bord est ramené dans l'image : une
+        ligne près du bord de gauche donne une bande qui commence à 0, pas une
+        bande qui commence à -80. C'est le seul comportement correct, parce
+        qu'un slicing numpy négatif est une indexation depuis la FIN : sans
+        cette correction, ``img[-80:120]`` ne rognerait pas du tout, il
+        prendrait les 200 derniers pixels — la bonne coupe par un pur hasard,
+        et la mauvaise pour toute autre ligne.
+
+        **Ligne hors cadre :** si le rectangle nu est entièrement hors de
+        l'image, on renvoie `None` et le modèle analyse tout. C'est plus sûr que
+        de rendre une bande dégénérée : un slicing de largeur nulle fait échouer
+        le modèle, et il n'y a rien à gagner puisque personne ne franchira une
+        ligne invisible.
+        """
+        if self.bande_detection_px is None:
+            return None
+        largeur_image = int(largeur_image)
+        hauteur_image = int(hauteur_image)
+        if largeur_image <= 0 or hauteur_image <= 0:
+            return None
+
+        demi = self.bande_detection_px / 2.0
+        # Les deux extrémités du segment, décalées de ±demi sur la normale :
+        # ce sont les deux bords de la bande. On prend le rectangle englobant
+        # de ces quatre coins.
+        nx, ny = self._n
+        coins = [
+            (px + nx * demi * signe, py + ny * demi * signe)
+            for signe in (1.0, -1.0)
+            for (px, py) in (self.p1, self.p2)
+        ]
+
+        # Recouvrement avec l'image. `None` si la bande est entièrement dehors.
+        x1 = max(0, int(math.floor(min(c[0] for c in coins))))
+        x2 = min(largeur_image, int(math.ceil(max(c[0] for c in coins))))
+        y1 = max(0, int(math.floor(min(c[1] for c in coins))))
+        y2 = min(hauteur_image, int(math.ceil(max(c[1] for c in coins))))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return (x1, y1, x2, y2)
 
     # -- Géométrie -------------------------------------------------------
 
@@ -266,8 +392,46 @@ class Ligne:
 
     # -- Rendu -----------------------------------------------------------
 
+    def voiler(self, img: np.ndarray) -> np.ndarray:
+        """Assombrit HORS de la bande de détection. Ne mute pas ``img``.
+
+        L'opérateur voit ainsi que seule la colonne compte, sans que la scène
+        devienne illisible : c'est un VOILE (facteur 0,6 = 40 % d'ombre), pas
+        un masque. Un masque noir serait plus net mais ferait perdre à
+        l'opérateur le contexte — il ne verrait plus ce qu'il a placementé.
+
+        **Appelé AVANT toute boîte de détection.** L'ordre est la seule chose
+        qui compte ici : assombrir après dessiné aplatit les boîtes elles aussi,
+        et l'opérateur ne voit plus ce que le modèle a trouvé. `overlay.dessiner`
+        applique donc le voile en premier, sur l'image nue.
+
+        Sans bande (``bande_detection_px is None``, ou bande entièrement hors
+        cadre) l'image est rendue telle quelle : il n'y a rien à mettre en
+        évidence, et noircir l'écran entier n'indiquerait aucune zone.
+        """
+        hauteur, largeur = img.shape[:2]
+        rect = self.rect_bande_detection(largeur, hauteur)
+        if rect is None:
+            return img
+        x1, y1, x2, y2 = rect
+        # Copie obligatoire AVANT toute écriture : `img` appartient à l'appelant
+        # et sert de source à la frame suivante. Le slicing produit une VUE
+        # numpy, écrire dedans modifierait l'original — un bug invisible à
+        # l'écran mais qui corromprait la vidéo analysée.
+        sortie = img.astype(np.float32, copy=True) * FACTEUR_VOILE
+        sortie[y1:y2, x1:x2] = img[y1:y2, x1:x2]
+        # L'arrondi est fait UNE fois, à la fin : arrondir puis recoller la
+        # bande laisserait un liseré d'une nuance au bord de la zone.
+        return np.clip(sortie, 0, 255).astype(img.dtype)
+
     def dessiner(self, img: np.ndarray) -> np.ndarray:
-        """Trace ligne, bande et flèche de sens. Ne mute pas ``img``."""
+        """Trace ligne, bande et flèche de sens. Ne mute pas ``img``.
+
+        Le voile de la bande de détection n'est PAS appliqué ici : ce serait
+        trop tard, les boîtes de détection sont déjà dessinées par
+        `overlay.dessiner` et seraient donc assombries avec le reste. Le voile
+        passe par `voiler`, appelé en amont.
+        """
         sortie = img.copy()
         p1 = (int(self.p1[0]), int(self.p1[1]))
         p2 = (int(self.p2[0]), int(self.p2[1]))

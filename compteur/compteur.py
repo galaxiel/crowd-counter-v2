@@ -13,7 +13,7 @@ from typing import Callable
 
 import numpy as np
 
-from .config import Config
+from .config import BANDE_DETECTION_PX, Config
 from .detecteur import Detecteur, charger_modele
 from .ligne import Ligne
 from .tracker import Tracker
@@ -76,6 +76,12 @@ class Compteur:
         self._vus_precedents: set[int] = set()
         self._somme_presents = 0
         self._nb_frames_vues = 0
+        # Identifiants dont le côté est devenu celui d'ARRIVÉE sur la frame en
+        # cours. Ils sont purgés APRÈS la boucle de comptage — voir
+        # `_purger_franchis`. C'est un ensemble de la frame courante, pas un
+        # état cumulé : sans ce « par frame », un identifiant déjà là
+        # continuerait de porter une entrée morte en mémoire pour rien.
+        self._franchis: set[int] = set()
 
     def ajuster_ligne(self, ligne: Ligne) -> None:
         self.ligne = ligne
@@ -96,6 +102,7 @@ class Compteur:
         self._vus_precedents.clear()
         self._somme_presents = 0
         self._nb_frames_vues = 0
+        self._franchis.clear()
         self.tracker.reinitialiser()
 
     def _purger_absents(self, vus: set[int]) -> None:
@@ -113,6 +120,40 @@ class Compteur:
         ):
             for identifiant in set(registre) - vus:
                 del registre[identifiant]
+
+    def _purger_franchis(self) -> None:
+        """Oublie les personnes qui ont franchi la ligne.
+
+        **Une personne qui a franchi la ligne ne peut plus jamais générer de
+        comptage.** Le test de franchissement exige un côté de départ
+        *strictement* positif (`a_traverse` : ``c_avant > 0 >= c_apres``), donc
+        une fois de l'autre côté, plus rien ne peut la faire compter à nouveau.
+        Ses entrées de suivi sont donc mortes.
+
+        Ce que ça achète, ce n'est PAS du temps de calcul sur la DÉTECTION —
+        mesuré, la bande ne change rien au temps (71 à 76 s). C'est de la
+        propreté d'état : les registres ci-dessous ne servent plus à rien pour
+        ces tracks. Le tracker, lui, garde sa propre piste : le vider serait
+        une optimisation DE PERFORMANCE que la mesure ne justifie pas, et dont
+        le risque (une réapparition du même identifiant comptée comme une
+        nouvelle personne) ne vaut pas le gain.
+
+        **L'ordre est important, et c'est vérifié.** Le verrou anti-rebond lit
+        `_cotes` et `_stabilite` — voir le bloc de `traiter_frame`. Cette purge
+        est donc appelée APRÈS la boucle de comptage, jamais pendant : un track
+        qui vient d'être compté a déjà été CEMÉ (`self._deja_comptes`) avant
+        d'être purgé, donc même si la boucle le relisait, il serait ignoré au
+        test anti-recomptage. Et `_deja_comptes` n'est volontairement PAS purgé
+        : c'est le journal anti-recomptage, pas un état par track.
+
+        Le résultat mesuré est la preuve que c'est gratuit : **256 personnes
+        avec et sans cette purge**, sur les 3000 frames de référence.
+        """
+        for identifiant in self._franchis:
+            self._derniers_centers.pop(identifiant, None)
+            self._historiques.pop(identifiant, None)
+            self._cotes.pop(identifiant, None)
+            self._stabilite.pop(identifiant, None)
 
     def _position_lissee(
         self, identifiant: int, center: tuple[float, float]
@@ -145,10 +186,34 @@ class Compteur:
             sum(p[1] for p in historique) / n,
         )
 
+    def _bande_pour(self, img: np.ndarray) -> tuple[int, int, int, int] | None:
+        """Rectangle de détection à appliquer à cette frame, ou `None`.
+
+        **C'est ici que le `Compteur` assume la responsabilité de la bande.**
+        `Detecteur` ne connaît pas la ligne — il ne fait qu'appliquer un
+        rectangle qu'on lui donne. Cette frontière est ce qui permet de
+        tester `detecteur.py` seul, et de remplacer le modèle sans toucher au
+        comptage.
+
+        Le rectangle est demandé à la LIGNE, pas recalculé ici : la bande est
+        un attribut de la ligne, pas du compteur. C'est ce qui garantit qu'elle
+        suit la ligne quand elle est déplacée, sans code de mise à jour — il n'y
+        a rien à synchroniser parce qu'il n'y a pas deux copies.
+
+        La taille de l'image est relue à CHAQUE frame plutôt que mise en cache :
+        une source peut changer de résolution en cours de flux, et une bande
+        calculée sur 1280 de large appliquée à une frame de 1920 rognerait au
+        mauvais endroit — un décompte faux, sans rien à l'écran pour le signaler.
+        """
+        if self.ligne is None:
+            return None
+        hauteur, largeur = img.shape[:2]
+        return self.ligne.rect_bande_detection(largeur, hauteur)
+
     def traiter_frame(
         self, img: np.ndarray, frame_index: int, timestamp_s: float
     ) -> FrameResult:
-        detections = self.detecteur.detecter(img)
+        detections = self.detecteur.detecter(img, self._bande_pour(img))
         tracks = self.tracker.mettre_a_jour(detections, frame_index)
         nouveaux: list[Evenement] = []
         ligne = self.ligne
@@ -174,6 +239,20 @@ class Compteur:
             precedent = self._derniers_centers.get(identifiant)
             self._derniers_centers[identifiant] = position
 
+            # Le côté est calculé UNE fois par track et sert aux deux usages :
+            # le marquage d'arrivée ci-dessous et, plus bas, l'écriture de
+            # `_cotes`. Les dupliquer coûterait un calcul de projection par
+            # track par frame pour rien.
+            cote = ligne.point_du_cote(t.center) if ligne is not None else 0
+
+            # Marquage des tracks arrivés, AVANT tout `continue`. Il doit l'être
+            # pour tous, y compris ceux déjà comptés : ce sont eux les plus
+            # nombreux, et c'est précisément eux dont l'état est mort. Placé
+            # après le `continue`, une personne déjà comptée garderait ses
+            # entrées pour rien — c'est le cas majoritaire.
+            if cote < 0:
+                self._franchis.add(identifiant)
+
             if identifiant in self._deja_comptes or ligne is None:
                 continue
 
@@ -182,7 +261,6 @@ class Compteur:
             cote_avant = self._cotes.get(identifiant)
             stabilite = self._stabilite.get(identifiant, 0)
 
-            cote = ligne.point_du_cote(t.center)
             if cote != 0:
                 # Le côté n'est mémorisé que HORS de la bande : à ±1 px de la
                 # ligne, `point_du_cote` renvoie 0, une personne qui oscille
@@ -224,6 +302,15 @@ class Compteur:
 
         # Purge des tracks disparus pour éviter les fuites mémoire.
         self._purger_absents({t.track_id for t in tracks})
+        # Purge des tracks ayant franchi, APRÈS la boucle de comptage : le
+        # verrou anti-rebond lit `_cotes` et `_stabilite`, les effacer pendant
+        # la boucle lui retirerait la moitié de son information de décision.
+        # L'ordre est donc déterminant, pas cosmétique — voir `_purger_franchis`.
+        self._purger_franchis()
+        # L'ensemble est consommé : le vider ici empêche un identifiant de
+        # rester marqué sur les frames suivantes, où il serait de nouveau
+        # légitime de le purger (il peut revenir du côté du départ).
+        self._franchis.clear()
 
         self.presents = len(tracks)
         self.presents_max = max(self.presents_max, self.presents)
@@ -315,6 +402,11 @@ def analyser_video(
                 epaisseur=config.epaisseur_bande,
                 sens=config.sens,
                 hysteresis=config.frames_hysteresis,
+                # La bande est un attribut de la ligne, pas un réglage à part :
+                # elle est donc passée ici au même titre que l'épaisseur. C'est
+                # ce qui fait qu'une analyse hors interface rogne exactement
+                # comme celle de la fenêtre.
+                bande_detection_px=BANDE_DETECTION_PX,
             )
         )
 

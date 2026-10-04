@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 
 from compteur.compteur import Compteur
 from compteur.config import (
+    BANDE_DETECTION_PX,
     MODE_MANUEL,
     Config,
     mode_peripherique,
@@ -192,10 +193,12 @@ class FenetrePrincipale(QMainWindow):
         self.label_compteur.setMinimumWidth(280)
         colonne.addWidget(self.label_compteur)
 
-        self.label_details = QLabel("Présents : 0   •   Frames : 0")
-        self.label_details.setObjectName("sous_titre")
-        self.label_details.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        colonne.addWidget(self.label_details)
+        # Le compteur de « présents » et celui de « frames » ont été retirés
+        # de l'affichage : deux chiffres que l'opérateur ne regardait jamais,
+        # et qui occupaient la place sous le seul chiffre qui compte. Les
+        # VALEURS restent calculées — `maj_compteurs` continue de les
+        # mémoriser, et le rapport comme l'export en dépendent. On ne retire
+        # que l'étiquette.
 
         # Le périphérique de calcul est affiché EN PERMANENCE, dans son PROPRE
         # label et non dans `label_statut`.
@@ -472,6 +475,12 @@ class FenetrePrincipale(QMainWindow):
         self._resultat_courant = None
         self._index_affiche = -1
         self._flash = 0
+        # Nouvelle vidéo : l'ancienne ligne était verrouillée pour l'analyse
+        # qui vient de s'arrêter. Sans ce déverrouillage, l'opérateur ne
+        # pourrait plus la déplacer, et le bouton « Tracer la ligne » échouerait
+        # silencieusement.
+        if self.ligne is not None:
+            self.ligne.deverrouiller()
         self.maj_compteurs(0, 0, 0)
 
     def _afficher_premiere_frame(self) -> None:
@@ -556,6 +565,7 @@ class FenetrePrincipale(QMainWindow):
                 epaisseur=self.config.epaisseur_bande,
                 sens=self.config.sens,
                 hysteresis=self.config.frames_hysteresis,
+                bande_detection_px=BANDE_DETECTION_PX,
             )
         except ValueError as exc:
             self._points_ligne = []
@@ -614,6 +624,11 @@ class FenetrePrincipale(QMainWindow):
             return
         sortie = img
         if self.ligne is not None:
+            # Le voile passe ici aussi, et AVANT la ligne : l'opérateur doit voir
+            # la colonne qu'il est en train de placer, pas seulement une fois
+            # l'analyse lancée. C'est le seul moment où il peut encore corriger
+            # son geste.
+            sortie = self.ligne.voiler(sortie)
             sortie = self.ligne.dessiner(sortie)
         if self._apercu_point is not None:
             sortie = _marquer_point(sortie, self._apercu_point)
@@ -670,6 +685,7 @@ class FenetrePrincipale(QMainWindow):
                     epaisseur=config.epaisseur_bande,
                     sens=config.sens,
                     hysteresis=config.frames_hysteresis,
+                    bande_detection_px=BANDE_DETECTION_PX,
                 )
             except ValueError as exc:
                 # Réglage devenu impossible (épaisseur 0, sens nul) : on garde
@@ -748,6 +764,12 @@ class FenetrePrincipale(QMainWindow):
             self._maj_boutons()
             return
 
+        # La ligne et sa bande de détection sont VERROUILLÉES dès le lancement.
+        # Pendant l'analyse, ni l'une ni l'autre ne bougent : sinon le
+        # décompte afficherait deux zones différentes dans la même vidéo, et
+        # l'opérateur verrait sa colonne glisser sous ses yeux sans pouvoir croire
+        # le chiffre. Le verrou est levé par `arreter()` et `_reset_analyse`.
+        self.ligne.verrouiller()
         self.compteur.ajuster_ligne(self.ligne)
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         self.compteur_total = 0
@@ -781,6 +803,7 @@ class FenetrePrincipale(QMainWindow):
                 epaisseur=self.config.epaisseur_bande,
                 sens=self.config.sens,
                 hysteresis=self.config.frames_hysteresis,
+                bande_detection_px=BANDE_DETECTION_PX,
             )
         except ValueError as exc:
             self._signaler("Ligne invalide", str(exc), grave=True)
@@ -816,6 +839,9 @@ class FenetrePrincipale(QMainWindow):
         """Ferme la session d'analyse et rend la main à l'opérateur."""
         self._timer_traitement.stop()
         self._timer_affichage.stop()
+        # Fin d'analyse : la ligne redevient déplaçable, bande comprise.
+        if self.ligne is not None:
+            self.ligne.deverrouiller()
         self._en_analyse = False
         self._session_ouverte = False
         self.btn_pause.setText("Pause")
@@ -925,9 +951,9 @@ class FenetrePrincipale(QMainWindow):
         # `str(int)` : le chiffre est lu de loin, un « 42.0 » se lirait mal et
         # une largeur changeante ferait Sauter l'alignement.
         self.label_compteur.setText(str(int(total)))
-        self.label_details.setText(
-            f"Présents : {int(presents)}   •   Frames : {int(frames)}"
-        )
+        # `presents` et `frames` sont enregistrés mais plus affichés : le
+        # second alimente encore l'avertissement « 0 compté », qui raisonne en
+        # secondes de VIDÉO, et le premier le bilan de fin d'analyse.
         self._maj_avertissement_sens(int(total), int(frames))
 
     # -- Avertissement « 0 compté » --------------------------------------
