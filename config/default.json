@@ -4,6 +4,7 @@
   "taille_min_px": 3,
   "classes_retenues": null,
   "taille_entree": 640,
+  "resolution_analyse": "auto",
   "frames_confirmation": 3,
   "survie_max": 30,
   "seuil_matching": 0.3,

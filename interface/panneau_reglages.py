@@ -15,6 +15,12 @@ Trois points méritent un mot, parce qu'ils ne sont pas évidents à la lecture 
 - **`fenetre_lissage` n'existe pas encore dans `Config`** (tâche parallèle).
   On le lit avec `getattr` pour que le panneau fonctionne avant comme après,
   et on ne l'écrit que si le champ existe.
+- **Le mode de résolution précède la taille d'entrée, parce qu'il la gouverne.**
+  En mode `Automatique`, la liste « Taille d'entrée » est un simple miroir de
+  ce que la vidéo impose : elle est GRISÉE, pas effacée, pour que l'opérateur
+  voie qu'elle existe et qu'il ne peut pas la piloter. Griser plutôt que
+  cacher est un choix : un réglage absent se cherche, un réglage grisé se
+  comprend.
 """
 
 from __future__ import annotations
@@ -34,7 +40,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from compteur.config import Config
+from compteur.config import (
+    MODE_AUTO,
+    MODE_MANUEL,
+    Config,
+    mode_resolution,
+    taille_entree_automatique,
+)
 from compteur.ligne import (
     LIBELLES_SENS,
     ORIENTATION_HORIZONTALE,
@@ -64,6 +76,16 @@ MODELE_REPLI = "medium.pt"
 #: Tailles d'entrée proposées. Une valeur absente de la liste est ajoutée à
 #: l'affichage plutôt que rejetée en silence.
 TAILLES_ENTREE: tuple[int, ...] = (320, 640, 1280)
+
+#: Choix de « Résolution d'analyse », `(libellé affiché, mode stocké)`.
+#:
+#: Le mode stocké est SANS ACCENT (`auto` / `manuel`) : c'est un identifiant
+#: qui voyage dans les profils JSON. Le libellé, lui, porte la recommandation,
+#: parce que c'est ce que l'opérateur lit.
+CHOIX_RESOLUTION_ANALYSE: tuple[tuple[str, str], ...] = (
+    ("Automatique (recommandé)", MODE_AUTO),
+    ("Manuelle", MODE_MANUEL),
+)
 
 #: Repli tant que `Config.fenetre_lissage` n'existe pas (tâche parallèle).
 FENETRE_LISSAGE_DEFAUT = 10
@@ -125,22 +147,37 @@ AIDE: dict[str, str] = {
     ),
     "taille_entree": (
         "Taille à laquelle l'image est réduite avant la détection.\n\n"
-        "Ce que ça fait : le modèle voit l'image à cette largeur, en "
+        "Ce que ça fait : le modèle voit l'image à cette taille, en "
         "redimensionnant la vidéo. Les boîtes sont ramenées à l'échelle de "
         "l'originale.\n"
         "Ce que ça change : augmenter trouve plus de petites têtes, donc plus "
         "de personnes, mais coûte plus de temps de calcul. Diminuer fait "
         "l'inverse et va plus vite, au prix de personnes perdues.\n"
-        "Valeur conseillée : 1280. Mesuré sur la vidéo de référence, le "
-        "décompte passe de 315 à 368 (+17 %) sans surcoût de calcul notable "
-        "(272 s contre 260 s sur 7399 frames), pour 64 détections par frame "
-        "au lieu de 48. C'est le SEUL réglage de la liste qui vaille le coup "
-        "d'être modifié. Une caméra de surveillance plafonne en général à "
-        "1280 : monte aussi haut que la source le permet. Au-delà, 1920 ne "
-        "rapporte que 149 détections par frame pour un temps de calcul bien "
-        "supérieur — c'est le meilleur rapport, pas le plus gros chiffre."
+        "Valeur conseillée : ne touche pas à ce réglage. Laisse « Résolution "
+        "d'analyse » sur Automatique, et cette valeur s'ajuste toute seule à "
+        "la vidéo chargée. Elle n'est modifiable qu'en mode manuel. Mesuré : "
+        "passer de 640 à 1280 sur une vidéo 720p fait passer le décompte de "
+        "315 à 368 (+17 %) sans surcoût de calcul (272 s contre 260 s sur "
+        "7399 frames), pour 64 détections par frame au lieu de 48."
     ),
-
+    "resolution_analyse": (
+        "Résolution d'analyse — à quelle taille la vidéo est analysée.\n\n"
+        "Ce que ça fait : en mode Automatique, l'image est analysée à la "
+        "résolution RÉELLE de la vidéo que tu viens de charger, jamais plus "
+        "haut que 1280. Le réglage « Taille d'entrée » devient alors "
+        "inactif, et la valeur retenue est affichée à côté.\n"
+        "Ce que ça change : rien au nombre de personnes comptées en soi — "
+        "c'est la même scène, vue plus ou moins finement. Une image trop "
+        "petite fait perdre les têtes lointaines ; une image trop grande "
+        "allonge le calcul sans rien ajouter. Passer de 640 à 1280 sur une "
+        "vidéo 720p, c'est +17 % de personnes comptées pour +5 % de temps.\n"
+        "Valeur conseillée : Automatique, qui est le réglage par défaut. "
+        "Mesuré sur la vidéo de référence : 640 compte 315 personnes en "
+        "260 s, 1280 en compte 368 en 272 s, et 1920 n'apporte RIEN de plus "
+        "que 1280 — d'où le plafond. Choisis Manuelle seulement si tu "
+        "connaîs le matériel et sais ce que tu fais : dans ce cas, ne "
+        "dépasse jamais 1280, au-delà tu paies du temps de calcul pour rien."
+    ),
     "frames_confirmation": (
         "Frames de confirmation.\n\n"
         "Ce que ça fait : une personne n'apparaît dans le décompte "
@@ -233,7 +270,32 @@ AIDE: dict[str, str] = {
         "K=5, 10 et 20. K>1 est aujourd'hui nuisible, il n'est exposé que "
         "parce que le champ existe dans la configuration."
     ),
-}
+    # Le seul réglage d'AIDE qui ne soit pas un champ de `Config` : la vitesse
+    # de présentation ne voyage pas dans un profil, elle est remise à zéro à
+    # chaque ouverture. Elle est ici pour une seule raison : ce curseur est
+    # celui que l'opérateur actionne le plus souvent APRÈS le lancement, et
+    # un réglage aussi fréquent sans explication est un réglage qu'on change
+    # au hasard — en croyant ralentir le comptage.
+    "vitesse_presentation": (
+        "Vitesse de présentation — à quel rythme l'analyse est affichée.\n\n"
+        "Ce que ça fait : ralentit ou accélère l'affichage de la vidéo "
+        "pendant que le comptage, lui, continue à la vitesse maximale de la "
+        "machine. Les images intermédiaires sont simplement sautées, comme "
+        "dans un lecteur vidéo en lecture lente : rien n'est mis en file "
+        "d'attente, rien n'est recalculé.\n"
+        "Ce que ça change : UNIQUEMENT la fluidité de ce que tu vois. NE "
+        "CHANGE PAS le décompte. Le nombre de personnes comptées est "
+        "exactement le même à 0,25× qu'à 4× : l'analyse a déjà été faite "
+        "dans les trois cas. Ralentir sert à regarder le détail d'un passage ; "
+        "accélérer sert à rattraper la fin d'une vidéo longue.\n"
+        "Valeur conseillée : « max », qui affiche chaque image traitée dès "
+        "qu'elle est prête. En dessous, l'affichage saute des images "
+        "intermédiaires : le chiffre affiché reste juste, mais tu ne vois "
+        "plus chaque personne passer la ligne. Choisis 0,25× si tu veux "
+        "regarder de près comment quelqu'un franchit la ligne, 1× pour le "
+        "confort de lecture, 4× ou « max » pour aller au bout d'une longue vidéo."
+    ),
+        }
 
 
 def orientation_par_defaut_sens() -> str:
@@ -432,7 +494,29 @@ class PanneauReglages(QWidget):
         self._taille_entree.addItems(self._tailles_entree_items(c.taille_entree))
         self._taille_entree.setCurrentText(str(c.taille_entree))
         self._taille_entree.currentTextChanged.connect(self._emettre)
+
+        # « Résolution d'analyse » PRÉCÈDE « Taille d'entrée », parce que c'est
+        # lui qui décide si la taille d'entrée compte encore. Dans l'ordre
+        # inverse, l'opérateur règle une valeur sans aucun effet, et ne le voit
+        # pas : le réglage manuel est en dessous, actif ou non.
+        self._resolution = QComboBox()
+        for libelle, _mode in CHOIX_RESOLUTION_ANALYSE:
+            self._resolution.addItem(libelle)
+        self._resolution.setCurrentIndex(
+            max(
+                0,
+                [m for _, m in CHOIX_RESOLUTION_ANALYSE].index(
+                    mode_resolution(c.resolution_analyse)
+                ),
+            )
+        )
+        self._resolution.currentIndexChanged.connect(self._emettre)
+        self._poser(
+            v, "resolution_analyse", "Résolution d'analyse", self._resolution
+        )
+
         self._poser(v, "taille_entree", "Taille d'entrée", self._taille_entree)
+        self._maj_activite_taille_entree()
         return g
 
     def _groupe_tracker(self, c: Config) -> QGroupBox:
@@ -573,6 +657,10 @@ class PanneauReglages(QWidget):
         c.modele = self._modele.currentText().strip()
         c.seuil_confiance = round(self._seuil.value(), 3)
         c.taille_min_px = self._taille_min.value()
+        c.resolution_analyse = mode_resolution(self._mode_resolution())
+        # En mode automatique, la liste déroulante n'est qu'un MIROIR de ce que
+        # la vidéo courante impose ; elle ne décide de rien. La renvoyer quand
+        # même évite que la Config affichée contredise l'écran.
         c.taille_entree = int(self._taille_entree.currentText())
         c.frames_confirmation = self._confirmation.value()
         c.survie_max = self._survie.value()
@@ -632,6 +720,14 @@ class PanneauReglages(QWidget):
             self._modele.setCurrentText(config.modele)
             self._seuil.setValue(config.seuil_confiance)
             self._taille_min.setValue(config.taille_min_px)
+            self._resolution.setCurrentIndex(
+                max(
+                    0,
+                    [m for _, m in CHOIX_RESOLUTION_ANALYSE].index(
+                        mode_resolution(config.resolution_analyse)
+                    ),
+                )
+            )
             self._taille_entree.clear()
             self._taille_entree.addItems(items)
             self._taille_entree.setCurrentText(str(config.taille_entree))
@@ -645,6 +741,7 @@ class PanneauReglages(QWidget):
                 int(getattr(config, "fenetre_lissage", FENETRE_LISSAGE_DEFAUT))
             )
             self._maj_etiquette_seuil()
+            self._maj_activite_taille_entree()
         finally:
             self._bloquer = False
         self.config_modifiee.emit(self.lire())
@@ -757,6 +854,72 @@ class PanneauReglages(QWidget):
         finally:
             self._bloquer = etait_bloque
 
+    def _mode_resolution(self) -> str:
+        """Mode de résolution d'analyse actuellement sélectionné.
+
+        Le menu porte le MODE, jamais l'indice : réordonner `CHOIX_RESOLUTION_
+        ANALYSE` ne peut pas retourner silencieusement le mode stocké, à
+        l'inverseexactement du bug que `sens` a déjà donné une fois.
+        """
+        index = self._resolution.currentIndex()
+        modes = [m for _, m in CHOIX_RESOLUTION_ANALYSE]
+        if 0 <= index < len(modes):
+            return modes[index]
+        return MODE_AUTO
+
+    def _maj_activite_taille_entree(self) -> None:
+        """Active la taille d'entrée SEULEMENT en mode manuel.
+
+        Griser le réglage plutôt que le cacher : l'opérateur voit qu'il existe,
+        qu'il est inactif, et pourquoi. Le laisser actif en mode automatique
+        donnerait l'impression qu'une taille choisie là compte.
+        """
+        manuel = self._mode_resolution() == MODE_MANUEL
+        self._taille_entree.setEnabled(manuel)
+
+    def definir_resolution_manuelle(self, manuel: bool = True) -> None:
+        """Bascule le mode de résolution d'analyse (raccourci et tests).
+
+        Le menu reste la voie normale : cette méthode existe pour qu'un test
+        n'ait pas à énumérer les choix, ce qui casse silencieusement dès que
+        l'ordre du menu change.
+        """
+        cible = MODE_MANUEL if manuel else MODE_AUTO
+        index = [m for _, m in CHOIX_RESOLUTION_ANALYSE].index(cible)
+        if self._resolution.currentIndex() != index:
+            self._resolution.setCurrentIndex(index)
+        self._maj_activite_taille_entree()
+
+    def definir_resolution_video(self, largeur: int, hauteur: int) -> int:
+        """Recalcule la résolution d'analyse d'après la vidéo chargée.
+
+        Renvoie la taille EFFECTIVE retenue, que la fenêtre affiche dans la
+        barre de statut : l'opérateur doit pouvoir voir à quoi sa vidéo est
+        analysée, sinon « automatique » est une promesse qu'il ne peut pas
+        vérifier.
+
+        En mode manuel, la vidéo est ignorée et rien ne bouge : c'est
+        précisément ce que l'opérateur a demandé.
+        """
+        if self._mode_resolution() != MODE_AUTO:
+            return int(self._taille_entree.currentText())
+        taille = taille_entree_automatique(largeur, hauteur)
+        etait_bloque = self._bloquer
+        self._bloquer = True
+        try:
+            items = self._tailles_entree_items(taille)
+            if self._taille_entree.count() != len(items) or [
+                self._taille_entree.itemText(i)
+                for i in range(self._taille_entree.count())
+            ] != items:
+                self._taille_entree.clear()
+                self._taille_entree.addItems(items)
+            self._taille_entree.setCurrentText(str(taille))
+            self._config = copier_config(self._config, taille_entree=taille)
+        finally:
+            self._bloquer = etait_bloque
+        return taille
+
     def _tailles_entree_items(self, valeur: int) -> list[str]:
         tailles = list(TAILLES_ENTREE)
         if valeur not in tailles:
@@ -774,6 +937,7 @@ class PanneauReglages(QWidget):
         if 0 <= index < len(choix):
             self._sens_actuel = choix[index]
         self._maj_etiquette_seuil()
+        self._maj_activite_taille_entree()
         self.config_modifiee.emit(self.lire())
 
     def _on_enregistrer(self) -> None:

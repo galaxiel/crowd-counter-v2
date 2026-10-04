@@ -49,12 +49,13 @@ from PySide6.QtWidgets import (
 )
 
 from compteur.compteur import Compteur
-from compteur.config import Config
+from compteur.config import MODE_MANUEL, Config, mode_resolution
 from compteur.detecteur import Detecteur, charger_modele
 from compteur.ligne import Ligne
 from compteur.tracker import Tracker
 from interface.overlay import dessiner
 from interface.panneau_reglages import (
+    AIDE,
     LIBELLES_SENS,
     PanneauReglages,
     orientation_par_defaut_sens,
@@ -188,18 +189,6 @@ class FenetrePrincipale(QMainWindow):
         zone.setFrameShape(QScrollArea.Shape.NoFrame)
         colonne.addWidget(zone, stretch=1)
 
-        self.choix_vitesse = QComboBox()
-        self.choix_vitesse.addItems(
-            ["0.25×", "0.5×", "1×", "2×", "4×", VITESSE_MAX]
-        )
-        self.choix_vitesse.setCurrentText(VITESSE_PAR_DEFAUT)
-        self.choix_vitesse.setToolTip(
-            "Vitesse de présentation.\n"
-            "Ralentit l'affichage seul : le comptage, lui, reste à la vitesse "
-            "maximale de la machine."
-        )
-        colonne.addWidget(self.choix_vitesse)
-
         barre = QHBoxLayout()
         self.btn_video = QPushButton("Charger la vidéo")
         self.btn_ligne = QPushButton("Tracer la ligne")
@@ -226,6 +215,35 @@ class FenetrePrincipale(QMainWindow):
         ):
             barre.addWidget(b)
         colonne.addLayout(barre)
+
+        # La vitesse de présentation vit JUSTE SOUS la barre de boutons, pas
+        # en bas de la colonne de réglages. C'est le seul curseur que
+        # l'opérateur actionne APRÈS avoir lancé — et c'est celui qu'il
+        # actionne le plus souvent : au ralenti pour vérifier un passage
+        # douteux, en accéléré pour rattraper la fin. En bas d'une colonne de
+        # 2000 px de réglages, il passait inapercu.
+        #
+        # Il porte un LIBELLÉ parce qu'un menu déroulant nu ne dit pas ce qu'il
+        # règle. Et son explication dit explicitement qu'il ne touche PAS au
+        # décompte : c'est la confusion la plus coûteuse possible ici, puisque
+        # ralentir l'affichage en croyant ralentir le comptage conduit à
+        # jeter une analyse de plusieurs minutes.
+        self.etiquette_vitesse = QLabel("Vitesse de présentation")
+        self.etiquette_vitesse.setObjectName("libelle_reglage")
+        ligne_vitesse = QHBoxLayout()
+        ligne_vitesse.addWidget(self.etiquette_vitesse)
+        self.choix_vitesse = QComboBox()
+        self.choix_vitesse.addItems(
+            ["0.25×", "0.5×", "1×", "2×", "4×", VITESSE_MAX]
+        )
+        self.choix_vitesse.setCurrentText(VITESSE_PAR_DEFAUT)
+        # L'explication vit dans `AIDE`, avec les 12 autres réglages : une
+        # seule source de vérité, et des tests qui la couvrent sans duplication.
+        aide_vitesse = AIDE["vitesse_presentation"]
+        self.etiquette_vitesse.setToolTip(aide_vitesse)
+        self.choix_vitesse.setToolTip(aide_vitesse)
+        ligne_vitesse.addWidget(self.choix_vitesse, stretch=1)
+        colonne.addLayout(ligne_vitesse)
 
         # Traitement : intervalle 0, donc « aussi vite que possible ». C'est
         # le GPU qui fixe la cadence de cette minuterie, jamais le curseur de
@@ -298,12 +316,44 @@ class FenetrePrincipale(QMainWindow):
 
         nb_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         fps = self._fps()
+        analyse = self._resolution_analyse_pour(cap)
+        largeur = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        hauteur = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         self.label_statut.setText(
-            f"{p.name} — {nb_frames} frames à {fps:.0f} i/s.\n"
-            "Trace la ligne, puis lance."
+            f"{p.name} — {largeur}×{hauteur}, {nb_frames} frames à {fps:.0f} i/s.\n"
+            f"Analysée à {analyse} px. Trace la ligne, puis lance."
         )
         self._maj_boutons()
         return True
+
+    def _resolution_analyse_pour(self, cap) -> int:
+        """Résolution d'analyse retenue pour la vidéo ouverte, et appliquée.
+
+        La résolution est LUE sur la `VideoCapture`
+        (`CAP_PROP_FRAME_WIDTH`/`HEIGHT`) — c'est ce que le conteneur déclare,
+        et cela ne coûte rien. Décoder une frame pour la mesurer serait plus
+        lent d'un facteur cent et donnerait le même chiffre.
+
+        Le réglage Manuel court-circuite tout : l'opérateur a dit qu'il savait
+        ce qu'il faisait, et son choix n'a pas à être corrigé par la source.
+        """
+        largeur = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        hauteur = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        if mode_resolution(self.config.resolution_analyse) == MODE_MANUEL:
+            return self.config.taille_entree
+        taille = self.panneau.definir_resolution_video(largeur, hauteur)
+        # Le panneau a recalculé pour son affichage ; `self.config` doit porter
+        # la MÊME valeur, sinon la fenêtre annoncerait une résolution et le
+        # détecteur en utiliserait une autre.
+        self.config = self.panneau.lire()
+        log.info(
+            "vidéo %dx%d analysée à %d px (mode %s)",
+            largeur,
+            hauteur,
+            taille,
+            mode_resolution(self.config.resolution_analyse),
+        )
+        return taille
 
     def _reset_analyse(self) -> None:
         """Repart d'un état neuf pour une nouvelle vidéo.
