@@ -97,6 +97,22 @@ FILTRES_VIDEOS = (
 #: Dossier proposé par défaut à l'export.
 DOSSIER_EXPORT_DEFAUT = "sortie"
 
+#: Durée de vidéo ANALYSÉE au-delà de laquelle un compteur resté à zéro doit
+#: être signalé. Exprimé en SECONDES DE VIDÉO et non en frames affichées :
+#: l'avertissement parle à l'opérateur qui regarde l'écran, or lui voit du
+#: temps, pas un compteur d'images. Trois secondes suffisent à voir un groupe
+#: arriver et à ne pas le compter, sans attendre la fin de la vidéo.
+SEUIL_AVERTISSEMENT_SENS_S = 3.0
+
+#: Le rappel, mot pour mot. Court, et une seule question : le défaut `sens`
+#: vaut +1 alors que le cortège de la vidéo de référence marche vers la
+#: gauche, et un zéro « rien ne traverse » ne se distingue pas, à l'écran,
+#: d'un zéro « tout le monde est compté dans l'autre sens ».
+AVERTISSEMENT_SENS = (
+    "0 compté — le sens de la flèche correspond-il au sens de marche "
+    "du cortège ?"
+)
+
 
 class FenetrePrincipale(QMainWindow):
     """La fenêtre : vidéo à gauche, compteur et réglages à droite."""
@@ -124,6 +140,9 @@ class FenetrePrincipale(QMainWindow):
         self._en_analyse = False
         #: Une analyse a été démarrée et n'est pas terminée (pause comprise).
         self._session_ouverte = False
+        #: L'avertissement « 0 compté » a déjà été montré pour CETTE analyse.
+        #: Vrai une fois, remis à faux à chaque nouveau comptage.
+        self._avertissement_sens_affiche = False
         #: Nom du modèle effectivement chargé dans `self.detecteur`.
         self._modele_charge = ""
         self._flash = 0
@@ -192,6 +211,25 @@ class FenetrePrincipale(QMainWindow):
         self.label_peripherique.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._maj_peripherique()
         colonne.addWidget(self.label_peripherique)
+
+        # L'avertissement « 0 compté » vit dans son PROPRE label, comme le
+        # périphérique de calcul et pour la même raison : `label_statut` est
+        # réécrit à chaque changement d'état (vidéo chargée, pause, erreur,
+        # fin de lecture) et l'effacerait au moment précis où l'opérateur en a
+        # besoin. Un label dédié, jamais réécrit sauf par cet avertissement
+        # lui-même, tient jusqu'à ce que le compteur reparte.
+        #
+        # Il est SOUS le compteur, dans la colonne de droite, juste au-dessus
+        # de la barre de statut : c'est là que l'œil va chercher pourquoi le
+        # chiffre ne bouge pas. Il est masqué (et non « vide ») quand il n'a
+        # rien à dire — un label vide garde sa place dans la colonne et ferait
+        # sauter la mise en page.
+        self.label_avertissement = QLabel()
+        self.label_avertissement.setObjectName("avertissement")
+        self.label_avertissement.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_avertissement.setWordWrap(True)
+        self.label_avertissement.setVisible(False)
+        colonne.addWidget(self.label_avertissement)
 
         self.label_statut = QLabel("Charge une vidéo pour commencer.")
         self.label_statut.setObjectName("sous_titre")
@@ -712,6 +750,11 @@ class FenetrePrincipale(QMainWindow):
         self._resultat_courant = None
         self._index_affiche = -1
         self._flash = 0
+        # « Une fois par analyse » : le compteur repart de zéro ici, donc le
+        # rappel doit pouvoir se redéployer. La réouverture de session après
+        # une pause NE le réarme pas : sans cela, chaque reprise en pause le
+        # ferait clignoter, alors que l'opérateur n'a pas relancé d'analyse.
+        self._avertissement_sens_affiche = False
         self._ouvrir_session()
         self._maj_boutons()
         self.label_statut.setText("Analyse en cours…")
@@ -879,6 +922,49 @@ class FenetrePrincipale(QMainWindow):
         self.label_details.setText(
             f"Présents : {int(presents)}   •   Frames : {int(frames)}"
         )
+        self._maj_avertissement_sens(int(total), int(frames))
+
+    # -- Avertissement « 0 compté » --------------------------------------
+
+    def _maj_avertissement_sens(self, total: int, frames: int) -> None:
+        """Rappelle de vérifier le sens quand le compteur reste bloqué à zéro.
+
+        C'est le SEUL réglage qui produise un zéro fiable : le sens par défaut
+        vaut +1, et la vidéo de référence donne 315 personnes en `sens=-1`
+        contre 1 en `sens=+1`. Un opérateur qui laisse le défaut voit une vidéo
+        défiler normalement, des boîtes de détection s'afficher, et un zéro
+        qui ne bouge pas — rien ne lui dit que le cortège est compté à
+        l'envers. D'où le rappel.
+
+        **Déclencheur volontairement simple** : `total == 0` après au moins
+        `SEUIL_AVERTISSEMENT_SENS_S` secondes de vidéo ANALYSÉE. La variante
+        « et le sens vient d'être changé » a été écartée : le cas le plus
+        fréquent est précisément l'opérateur qui n'y touche pas, donc cette
+        condition supprimerait l'avertissement dans le cas pour lequel il
+        existe. Le seuil de 3 s suffit à écarter le démarrage d'analyse et le
+        risque d'alerter sur une scène où, simplement, personne n'est encore
+        passé.
+
+        Le rappel est une fois par analyse, jamais par frame : `_afficher` est
+        appelé 25 fois par seconde, et un message qui clignote n'est plus un
+        message. Il disparaît dès que `total` repart, et à chaque nouvelle
+        analyse.
+        """
+        if not self._session_ouverte or total > 0:
+            self._avertissement_sens_affiche = False
+            self.label_avertissement.setVisible(False)
+            return
+        if self._avertissement_sens_affiche:
+            return
+        # Le seuil est en SECONDES DE VIDÉO, pas en frames affichées : ralentir
+        # la présentation ne doit pas retarder ni hâter l'avertissement, qui
+        # parle d'un temps vécu par l'opérateur.
+        if frames / self._fps() < SEUIL_AVERTISSEMENT_SENS_S:
+            return
+        self._avertissement_sens_affiche = True
+        self.label_avertissement.setText(AVERTISSEMENT_SENS)
+        self.label_avertissement.setVisible(True)
+        log.info("avertissement « 0 compté » : vérifier le sens de la ligne")
 
     def _afficher_bilan(self) -> None:
         """Bilan de fin de lecture, sans dépendre de `compteur.rapport`.

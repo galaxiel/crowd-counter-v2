@@ -40,7 +40,7 @@ from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 
 from compteur.types import Evenement, FrameResult  # noqa: E402
-from interface.app import FenetrePrincipale  # noqa: E402
+from interface.app import AVERTISSEMENT_SENS, FenetrePrincipale  # noqa: E402
 
 # Cadence de la vidéo synthétique : 25 i/s. Les tests d'affichage en dépendent
 # (0,25x -> 160 ms entre deux images affichées).
@@ -712,3 +712,248 @@ def test_le_lancer_signale_un_modele_absent_sans_vider_la_video(
     assert f.cap is not None
     assert f.ligne is not None
     assert f.btn_lancer.isEnabled()  # on peut réessayer une fois le modèle là
+
+
+# -- Avertissement « 0 compté : vérifie le sens » ------------------------
+#
+# Le cas testé ici est LE piège de l'outil : sur la vidéo de référence,
+# `sens=-1` compte 315 personnes et `sens=+1` (le défaut) en compte 1. Un
+# opérateur qui laisse le défaut voit la vidéo défiler, les boîtes de
+# détection s'afficher, et un zéro qui ne bouge pas. Sans rappel, il n'a
+# aucun moyen de distinguer « personne ne traverse » de « tout le monde est
+# compté à l'envers ».
+#
+# Le rappel doit être DISCRET : pas de modale (elle bloquerait un traitement
+# en cours), et pas plus d'une fois par analyse (il est rappelé à chaque frame
+# affichée, donc 25 fois par seconde).
+
+
+class CompteurInvisible:
+    """Compteur qui ne voit personne : `total` reste à 0 indéfiniment.
+
+    Le constructeur accepte n'importe quoi : ce fake remplace `Compteur` dans
+    le test de relance, qui l'instancie avec `(config, detecteur, tracker)`.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.ligne = None
+
+    def ajuster_ligne(self, ligne) -> None:
+        self.ligne = ligne
+
+    def traiter_frame(self, img, index, ts) -> FrameResult:
+        return FrameResult(
+            image=img,
+            total=0,
+            presents=0,
+            frame_index=index,
+            timestamp_s=ts,
+            evenements=[],
+        )
+
+    def resultat(self, modele, nb_frames, secondes):
+        from compteur.types import Resultat
+
+        return Resultat(
+            total=0,
+            evenements=[],
+            modele=modele,
+            nb_frames=nb_frames,
+            presents_max=0,
+            secondes=secondes,
+        )
+
+
+def avertissement_visible(fenetre):
+    """L'avertissement est-il affiché ?
+
+    On interroge `isHidden()` et non `isVisible()` : sous `offscreen`, et
+    pour toute fenêtre jamais `show()`e, `isVisible()` renvoie `False` sur
+    TOUS les enfants — y compris un label que l'on vient d'afficher. Le test
+    passerait donc toujours, ou échouerait pour la mauvaise raison.
+    """
+    return fenetre.label_avertissement.isHidden() is False
+
+
+class FauxDetecteurMinimal:
+    """Détecteur sans poids : `lancer` n'a besoin que de l'instancier."""
+
+    def __init__(self, modele, config) -> None:
+        self.config = config
+
+
+@pytest.fixture
+def video_longue(tmp_path):
+    """100 frames à 25 i/s, soit 4 s de vidéo.
+
+    La vidéo de 5 frames du reste de la suite ne permet pas d'atteindre les
+    trois secondes du seuil : l'analyse y finit avant que l'avertissement
+    puisse avoir lieu de se déclencher.
+    """
+    chemin = tmp_path / "longue.mp4"
+    auteur = cv2.VideoWriter(
+        str(chemin), cv2.VideoWriter_fourcc(*"mp4v"), FPS_SYNTHETIQUE, (64, 48)
+    )
+    assert auteur.isOpened(), "OpenCV n'a pas pu écrire la vidéo de test"
+    for i in range(100):
+        auteur.write(np.full((48, 64, 3), 20 + (i % 20) * 10, dtype=np.uint8))
+    auteur.release()
+    return chemin
+
+
+def test_avertissement_sens_absent_au_demarrage(application, fenetre):
+    """Une fenêtre vide n'affiche aucun rappel : rien n'a encore été compté."""
+    f = fenetre
+    assert avertissement_visible(f) is False
+    assert f.label_avertissement.text() == ""
+
+
+def test_avertissement_sens_pas_avant_le_seuil_de_trois_secondes(
+    application, fenetre, video_longue
+):
+    """Point 3 : à 2,9 s de vidéo, le rappel n'est pas encore justifié.
+
+    Sans ce délai, l'avertissement apparaîtrait sur les premières secondes de
+    n'importe quelle analyse — y compris sur une scène où personne n'est
+    encore passé — et deviendrait un bruit que l'opérateur ignore.
+    """
+    f = fenetre
+    f.charger_video(str(video_longue))
+    f.compteur = CompteurInvisible()
+    f._ouvrir_session()
+    avancer(f, 70)  # 2,8 s à 25 i/s
+    assert avertissement_visible(f) is False
+
+
+def test_avertissement_sens_apparait_au_dela_de_trois_secondes(
+    application, fenetre, video_longue
+):
+    """Point 1 : zéro franc après 3 s de vidéo -> le rappel s'affiche."""
+    f = fenetre
+    f.charger_video(str(video_longue))
+    f.compteur = CompteurInvisible()
+    f._ouvrir_session()
+    avancer(f, 80)  # 3,2 s à 25 i/s
+    assert avertissement_visible(f) is True
+    assert f.label_avertissement.text() == AVERTISSEMENT_SENS
+    assert "sens" in f.label_avertissement.text().lower()
+
+
+def test_avertissement_sens_disparait_des_que_le_compteur_repart(
+    application, fenetre, video_longue
+):
+    """Point 2 : au premier comptage, le rappel s'efface.
+
+    Un avertissement affiché pendant que le compteur monte serait un mensonge :
+    il dirait à l'opérateur que son sens est douteux alors qu'il vient de
+    compter quelqu'un.
+    """
+    f = fenetre
+    f.charger_video(str(video_longue))
+    f.compteur = CompteurInvisible()
+    f._ouvrir_session()
+    avancer(f, 80)
+    assert avertissement_visible(f) is True
+    f.maj_compteurs(total=1, presents=1, frames=81)
+    assert avertissement_visible(f) is False
+
+
+class LabelEspion:
+    """_proxy du label qui compte les `setText`.
+
+    Ce n'est pas un test cosmétique : `_afficher` est appelé 25 fois par
+    seconde, donc un rappel réécrit à chaque frame serait lu comme un
+    clignotement — l'opérateur le verrait clignoter et finirait par l'ignorer.
+    On compte donc les ÉCRITURES, pas seulement la présence du texte.
+    """
+
+    def __init__(self, label) -> None:
+        self._label = label
+        self.écritures = 0
+
+    def setText(self, texte: str) -> None:
+        self.écritures += 1
+        self._label.setText(texte)
+
+    def setVisible(self, visible: bool) -> None:
+        self._label.setVisible(visible)
+
+    def isHidden(self) -> bool:
+        return self._label.isHidden()
+
+    def text(self) -> str:
+        return self._label.text()
+
+
+def test_avertissement_sens_ne_clignote_pas_a_haque_frame(
+    application, fenetre, video_longue
+):
+    """Une seule fois par analyse, jamais une fois par frame.
+
+    `_afficher` tourne 25 fois par seconde : sans ce verrou, le label serait
+    réécrit 25 fois par seconde et l'opérateur le lirait comme un clignotement.
+    """
+    f = fenetre
+    f.charger_video(str(video_longue))
+    f.compteur = CompteurInvisible()
+    f._ouvrir_session()
+    f.label_avertissement = LabelEspion(f.label_avertissement)
+    avancer(f, 80)
+    écritures_au_declenchement = f.label_avertissement.écritures
+    assert écritures_au_declenchement == 1
+    avancer(f, 10)
+    assert f.label_avertissement.écritures == écritures_au_declenchement
+    assert f.label_avertissement.text() == AVERTISSEMENT_SENS
+    assert avertissement_visible(f) is True
+
+
+def test_avertissement_sens_reapparait_a_la_relance(
+    application, fenetre, video_longue, monkeypatch
+):
+    """Relancer une nouvelle analyse réarme le rappel.
+
+    Le scénario « mauvais sens » se corrige en changeant le réglage et en
+    RELANCANT : si le rappel ne pouvait pas se redéployer, il resterait muet au
+    moment précis où l'opérateur vérifie sa correction.
+
+    Le modèle est remplacé par un faux : sans cela, `lancer` chargerait
+    `medium.pt` sur le GPU et le test prendrait dix secondes.
+    """
+    monkeypatch.setattr("interface.app.charger_modele", lambda *a, **k: object())
+    monkeypatch.setattr("interface.app.Detecteur", FauxDetecteurMinimal)
+    monkeypatch.setattr("interface.app.Tracker", lambda config: object())
+    monkeypatch.setattr("interface.app.Compteur", CompteurInvisible)
+
+    f = fenetre
+    f.charger_video(str(video_longue))
+    f._on_tracer_ligne()
+    f._on_clic_video(10, 2)
+    f._on_clic_video(10, 40)
+    f.lancer()
+    assert f._en_analyse is True
+    assert f._avertissement_sens_affiche is False
+
+    avancer(f, 80)
+    assert avertissement_visible(f) is True
+
+    # L'opérateur corrige le sens et RELANCE : le rappel doit pouvoir se
+    # redéployer au lieu de rester muet sur la nouvelle analyse.
+    f.arreter()
+    f.lancer()
+    assert f._avertissement_sens_affiche is False
+
+
+def test_avertissement_sens_ne_saffiche_pas_hors_analyse(
+    application, fenetre, video_longue
+):
+    """Pas d'analyse ouverte, pas de rappel — même après 100 frames.
+
+    Sans la garde sur la session, charger une vidéo et faire défiler
+    l'aperçu suffirait à afficher un avertissement qui n'a aucun sens : rien
+    n'a été compté.
+    """
+    f = fenetre
+    f.charger_video(str(video_longue))
+    assert f._session_ouverte is False
+    f.maj_compteurs(total=0, presents=0, frames=500)
+    assert avertissement_visible(f) is False

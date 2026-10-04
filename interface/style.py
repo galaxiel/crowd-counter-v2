@@ -50,6 +50,12 @@ QSlider::handle:horizontal {
 QLabel#compteur { font-size: 76px; font-weight: 700; color: #4ade80; }
 QLabel#compteur_titre { font-size: 14px; color: #9aa3af; letter-spacing: 2px; }
 QLabel#sous_titre { color: #9ca3af; }
+/* Rappel « 0 compté : vérifie le sens ». Ambre, pas rouge : c'est un
+   conseil, pas une erreur, et du rouge concurrencerait le flash de comptage
+   et le bouton primaire. Gras pour sauter aux yeux sans être une alerte. */
+QLabel#avertissement {
+    color: #fbbf24; font-weight: 600; padding-top: 4px;
+}
 /* Aide sous un reglage : volontairement en petit et gris. Elle est lue de
    pres, jamais de loin — le seul chiffre lu de loin reste le compteur. Elle ne
    doit pas rivaliser avec le champ qu'elle decrit. */
