@@ -19,7 +19,6 @@ density estimation.
   - [Choosing where the compute happens](#choosing-where-the-compute-happens)
 - [Building the executable](#building-the-executable)
 - [Using the software](#using-the-software)
-- [Exporting](#exporting)
 - [Design decisions and scope](#design-decisions-and-scope)
 - [Known limitations](#known-limitations)
 - [Architecture](#architecture)
@@ -295,16 +294,21 @@ During a replay, the *Audit* panel lets you flag errors by eye. The error rate
 shown is only valid for the portion you actually checked: it is a
 **measurement**, not an automatic estimate.
 
-## Exporting
+### Reading the green boxes
 
-*Export* writes into the chosen folder:
+When a person is counted, their box turns **green** for a few seconds, then
+fades out as they leave the band on the far side of the line.
 
-- a **CSV**: one event per row (frame, timestamp, tracked identity, position,
-  score);
-- a **JSON**: total, rate statistics, complete configuration.
+This is not decoration — **it is the only way to see a mistake without ground
+truth.** Nobody can recount a demonstration by hand, and the counter will never
+say "I missed one": the total is just a number, and a wrong number looks exactly
+like a right one. But a person walking across the line *without* their box
+turning green is a visible miss. Twenty seconds of watching tells you whether
+the count can be trusted, and nothing else on screen tells you that.
 
-The default proposed folder is `sortie/`, relative to the current folder —
-that is, `dist\sortie\` when launching the executable.
+So when you check a result, don't only read the total. Watch the line for a
+while and count the green boxes yourself. If a head crosses and stays amber, you
+have found a miss — and you know roughly how far off the number is.
 
 ## Design decisions and scope
 
@@ -333,8 +337,9 @@ These are not "not yet implemented" — they were considered and ruled out:
 
 ### The detection band
 
-The model only looks inside a **200 px band centred on the line**. Everything
-outside it is dimmed on screen and never reaches the detector.
+The model only looks inside a band **200 px wide before the line and 100 px
+after it** — 300 px in total, deliberately lopsided. Everything outside it is
+dimmed on screen and never reaches the detector.
 
 This is the core design decision, and it cuts both ways:
 
@@ -346,9 +351,15 @@ This is the core design decision, and it cuts both ways:
   operator immediately where the counting happens, instead of boxes appearing
   and vanishing with no visible reason.
 
-Measured on the reference video, all band widths from 200 px to 600 px produce
-a higher count than analysing the whole frame, and 200 px is the cheapest of
-them. Wider does not help further.
+**Why the band is not centred.** The tracker needs room *before* the line: an
+identity is built over several frames, from several images, and that is what
+makes the crossing reliable. After the line the count is already made — a
+crossed person can never be counted again — so the 100 px that only serve to
+show them walking away are enough. A centred 200 px band spent half of its
+width on a region that cannot change the result.
+
+Measured on the reference video, band widths from 200 px to 600 px all produce
+a higher count than analysing the whole frame; wider does not help further.
 
 The band moves with the line: click anywhere in it and drag, and the line
 comes along. Both are locked once the analysis starts — a line that moved

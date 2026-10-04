@@ -16,11 +16,6 @@ def test_aire_calculee():
     assert d.aire == pytest.approx(50.0)
 
 
-def test_evenement_vers_ligne_csv():
-    e = Evenement(frame=42, timestamp_s=1.4, x=100.0, y=200.0, track_id=7)
-    assert e.vers_ligne_csv() == "42,1.400,100.0,200.0,7"
-
-
 def test_frame_result_na_pas_de_champ_redondant():
     """`indice` doublait `frame_index` et n'était consommé par aucune tâche.
 

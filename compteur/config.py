@@ -96,11 +96,28 @@ PERIPHERIQUES: tuple[str, ...] = (
 #: qui monte en mode manuel paie ce supplément en connaissance de cause.
 PLAFOND_ANALYSE = 1280
 
-#: Largeur de la BANDE DE DÉTECTION, en pixels de l'image native.
+#: Profondeur de la BANDE DE DÉTECTION de chaque côté de la ligne, en
+#: pixels de l'image native.
 #:
-#: Le modèle ne tourne pas sur l'image entière mais sur une bande de cette
-#: largeur centrée sur la ligne de comptage. Mesuré sur 3000 frames de la vidéo
-#: de référence (ligne verticale x=640, `sens=-1`, `imgsz=640`) :
+#: Le modèle ne tourne pas sur l'image entière mais sur une bande
+#: **dissymétrique** : 200 px du côté d'où viennent les gens, 100 px de l'autre.
+#: Ce n'est pas un réglage : c'est une propriété géométrique de la ligne, elle
+#: se déplace donc AVEC elle.
+#:
+#: **Pourquoi dissymétrique.** Avant la ligne, le tracker a besoin d'espace pour
+#: CONSTRUIRE l'identité de quelqu'un qui approche — plusieurs frames, des
+#: images successives, pour associer les boîtes à un track stable. Après la
+#: ligne, le compte est fait : `a_traverse` exige un côté de départ strictement
+#: positif, cette personne ne peut donc plus jamais compter. Il ne reste qu'à
+#: la voir passer, et 100 px suffisent. Les 100 px que la bande symétrique
+#: gaspillait de ce côté-là ne servaient à rien.
+#:
+#: « Avant » et « après » ne sont pas des mots de dessin mais le vocabulaire de
+#: `compteur.ligne` : côté de DÉPART (coordonnée positive sur la normale,
+#: `point_du_cote == +1`) et côté d'ARRIVÉE (coordonnée négative).
+#:
+#: Mesuré sur 3000 frames de la vidéo de référence (ligne verticale x=640,
+#: `sens=-1`, `imgsz=640`), bande alors symétrique :
 #:
 #: | bande  | détections/frame | compté |
 #: |--------|------------------|--------|
@@ -109,17 +126,26 @@ PLAFOND_ANALYSE = 1280
 #: | 300 px  | 20,3            | 254    |
 #: | 600 px  | 42,2            | 258    |
 #:
-#: Le motif est stable de 200 à 600 px : le gain vient de la restriction
-#: elle-même, pas d'une largeur particulière. On retient donc la plus étroite,
-#: la plus rapide. **Ce n'est PAS un compromis précision/vitesse** : le gain est
-#: des deux côtés. Hors bande, le tracker s'efforce d'associer des dizaines de
-#: plusieurs personnes qui se gênent entre elles (boîtes fusionnées, identités
-#: qui permutent) ; en ne gardant que celles qui approchent de la ligne, il suit
-#: moins de cibles mais il les suit bien.
+#: Le gain vient de la restriction elle-même, pas d'une largeur particulière :
+#: hors bande, le tracker s'efforce d'associer des dizaines de personnes qui se
+#: gênent entre elles (boîtes fusionnées, identités qui permutent) ; en ne
+#: gardant que celles qui approchent de la ligne, il suit moins de cibles mais
+#: il les suit bien.
 #:
 #: La bande ne fait PAS gagner de temps de calcul (71 à 76 s quelle que soit la
 #: largeur) : le goulot est ailleurs. Ce n'est pas une optimisation de débit.
-BANDE_DETECTION_PX = 200
+BANDE_AVANT_PX = 200
+BANDE_APRES_PX = 100
+
+#: Durée d'affichage de la boîte verte d'une personne qui vient d'être
+#: comptée, en frames TRAITÉES (pas affichées).
+#:
+#: 100 px de bande après la ligne à 0,69 px/frame mesuré sur la vidéo de
+#: référence : 145 frames, soit ~5 s de vidéo. C'est la durée pendant laquelle
+#: la personne reste dans la zone utile après son comptage. La borne est donc
+#: le TEMPS DE VISIBILITÉ, pas un clignotement : on veut voir la personne
+#: s'éloigner, pas la voir disparaître.
+DUREE_BOITE_COMPTEE_FRAMES = 145
 
 #: Facteur d'assombrissement appliqué HORS de la bande de détection, à
 #: l'affichage uniquement. L'image reste lisible : c'est un voile, pas un

@@ -1,13 +1,21 @@
-"""Export des résultats d'une analyse : CSV, JSON, statistiques, fiabilité.
+"""Statistiques de synthèse d'une analyse terminée : ce que l'écran affiche.
 
-C'est ce qui transforme un compteur en outil utilisable par un média. Sans ce
-module, le total affiché n'existe que sur l'écran de la machine qui a lancé
-l'analyse.
+## Ce que ce module fait, et ce qu'il a cessé de faire
 
-## Ce que le rapport promet, et ce qu'il refuse de promettre
+L'export de fichiers (CSV, JSON) a été **supprimé** : l'opérateur ne lit plus
+ses résultats dans un tableur, il les lit dans le récapitulatif de fin
+d'analyse. Ce qui reste ici est la **COMPUTATION** de ces chiffres, parce que
+`interface.recap` s'appuie dessus — même source, donc même total, même durée,
+même débit, même pic.
 
-L'export est tenu à une règle : **ne jamais laisser croire à une précision
-qu'il n'a pas.**
+Il ne reste donc ni `ecrire_csv`, ni `ecrire_json`, ni `chemins_par_defaut` :
+plus rien n'écrit sur le disque. `Evenement.vers_ligne_csv` a disparu avec
+son seul appelant.
+
+## Ce que les statistiques promettent, et ce qu'elles refusent de promettre
+
+Les chiffres sont tenus à une règle : **ne jamais laisser croire à une précision
+qu'ils n'ont pas.**
 
 Mesures réelles sur la vidéo de référence :
 
@@ -35,34 +43,14 @@ Quand un indicateur ne peut pas être mesuré à partir du `Resultat` disponible
 la clé vaut ``None`` et un avertissement l'explique. Elle n'est jamais
 supprimée, et jamais remplie par une valeur devinée : « non mesuré » est une
 information, une clé absente n'en est pas une.
-
-## Répartition des fichiers
-
-- le **CSV** est la liste brute des franchissements (une ligne par événement,
-  en-tête fixe) : c'est ce qu'un tableur ouvre ;
-- le **JSON** porte tout le reste — contexte, config **complète**, statistiques
-  et fiabilité — : c'est ce qui rend l'analyse rejouable et ce qui permet de
-    vérifier ce chiffre avant de le publier ;
-- `Resultat.config` étant optionnel, l'export fonctionne aussi sans config
-  (``"config": null``).
 """
 
 from __future__ import annotations
 
-import json
-import pathlib
 from collections import Counter
 from statistics import median
 
 from .types import Resultat
-
-#: En-tête du CSV. Volontairement minimal et stable : c'est un contrat avec
-#: les tableurs et les scripts qui lisent la sortie.
-ENTETE_CSV = "frame,timestamp_s,x,y,track_id"
-
-#: Colonnes d'un événement, dans l'ordre du CSV. Les deux exports doivent
-#: porter les mêmes informations : une divergence serait invisible.
-COLONNES_EVENEMENT = ("frame", "timestamp_s", "x", "y", "track_id")
 
 #: Fenêtre du pic de débit. Au plus 60 s, et jamais plus que la durée réelle de
 #: l'analyse : une vidéo de 10 s ne peut pas produire une minute observée, et
@@ -75,94 +63,6 @@ FENETRE_DEBIT_S = 60.0
 #: débit par minute systématiquement sous-estimé — deux fois moins, si
 #: l'analyse a duré deux fois la vidéo.
 SEUIL_FPS_PLAUSIBLE = 5.0
-
-
-# -- Chemins ---------------------------------------------------------------
-
-
-def chemin_video_nom(chemin_video: str) -> str:
-    """Nom de la vidéo sans son extension."""
-    return pathlib.Path(chemin_video).stem
-
-
-def chemins_par_defaut(chemin_video: str, dossier: str | pathlib.Path) -> dict:
-    """Les deux chemins d'export déduits du nom de la vidéo et du dossier.
-
-    L'interface appelle cette fonction et affiche ensuite ``chemins['csv'].name``
-    à l'utilisateur : les valeurs doivent être des `Path`, pas des chaînes.
-    Le dossier n'est pas créé ici — `ecrire_csv` / `ecrire_json` le font, et
-    l'utilisateur peut changer d'avis avant d'écrire.
-    """
-    base = chemin_video_nom(chemin_video)
-    d = pathlib.Path(dossier)
-    return {
-        "csv": d / f"{base}_head_results.csv",
-        "json": d / f"{base}_head_results.json",
-    }
-
-
-# -- Écriture --------------------------------------------------------------
-
-
-def ecrire_csv(resultat: Resultat, chemin: str | pathlib.Path) -> pathlib.Path:
-    """Écrit un événement par ligne et rend le chemin écrit.
-
-    Zéro événement produit un fichier réduit à son en-tête : c'est le cas réel
-    de la vidéo de référence, pas une erreur. Un fichier à en-tête seul est
-    lisible par tous les tableurs et dit exactement la vérité — zéro
-    franchissement.
-    """
-    p = pathlib.Path(chemin)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    lignes = [ENTETE_CSV]
-    lignes.extend(ev.vers_ligne_csv() for ev in resultat.evenements)
-    # `newline="\n"` explicite : en mode texte, Python traduit "\n" en CRLF sous
-    # Windows. Deux conséquences, et chacune compte — le fichier exporté depuis
-    # Windows ne serait pas octet-pour-octet identique à celui exporté depuis
-    # Linux (donc pas reproductible d'une machine à l'autre), et un `\r` traînant
-    # casse les lecteurs ligne à ligne les plus naïfs.
-    p.write_text("\n".join(lignes) + "\n", encoding="utf-8", newline="\n")
-    return p
-
-
-def ecrire_json(resultat: Resultat, chemin: str | pathlib.Path) -> pathlib.Path:
-    """Écrit le rapport complet et rend le chemin écrit.
-
-    Le JSON est la source de vérité de l'analyse : il porte la config
-    complète, les événements, les statistiques et les indicateurs de
-    fiabilité. `ensure_ascii=False` : les messages d'avertissement sont en
-    français et doivent rester lisibles.
-    """
-    p = pathlib.Path(chemin)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    stats = statistiques(resultat)
-    donnees = {
-        "total": resultat.total,
-        "modele": resultat.modele,
-        "nb_frames": resultat.nb_frames,
-        "presents_max": resultat.presents_max,
-        "presents_moyen": resultat.presents_moyen,
-        "secondes": resultat.secondes,
-        # Config COMPLÈTE : c'est elle qui permet de rejouer l'analyse. Une
-        # config tronquée aux champs « visibles » ne dit pas quel seuil, quelle
-        # bande ni quel lissage ont réellement servi.
-        "config": resultat.config.vers_dict() if resultat.config else None,
-        "evenements": [
-            dict(zip(COLONNES_EVENEMENT, (getattr(ev, c) for c in COLONNES_EVENEMENT)))
-            for ev in resultat.evenements
-        ],
-        "statistiques": stats,
-        # Répliqué au premier niveau : le lecteur ouvre le JSON et doit trouver
-        # les indicateurs de fiabilité sans avoir à fouiller dans
-        # « statistiques ». Même objet, pas une seconde mesure.
-        "fiabilite": stats["fiabilite"],
-    }
-    p.write_text(
-        json.dumps(donnees, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    return p
 
 
 # -- Statistiques ----------------------------------------------------------

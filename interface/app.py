@@ -50,7 +50,9 @@ from PySide6.QtWidgets import (
 
 from compteur.compteur import Compteur
 from compteur.config import (
-    BANDE_DETECTION_PX,
+    BANDE_APRES_PX,
+    BANDE_AVANT_PX,
+    DUREE_BOITE_COMPTEE_FRAMES,
     MODE_MANUEL,
     Config,
     mode_peripherique,
@@ -96,8 +98,30 @@ FILTRES_VIDEOS = (
     "Vidéos (*.mp4 *.avi *.mkv *.mov *.m4v *.webm);;Tous les fichiers (*)"
 )
 
-#: Dossier proposé par défaut à l'export.
-DOSSIER_EXPORT_DEFAUT = "sortie"
+#: TAILLE DE LA LISTE des boîtes vertes affichées après un comptage.
+#:
+#: La liste est bornée DEUX fois, par deux règles indépendantes, parce que
+#: chacune rattrape une défaillance de l'autre :
+#:
+#: 1. **Une durée** (`DUREE_BOITE_COMPTEE_FRAMES`, 145 frames ≈ 5 s) : c'est
+#:    la règle qui décide de la vie réelle d'une boîte verte. 100 px après la
+#:    ligne à 0,69 px/frame mesuré : c'est le temps que la personne met à sortir
+#:    de la zone utile. Au-delà, elle n'est plus là, la garder n'apprend rien.
+#: 2. **Un nombre** (cette constante, 200) : c'est le filet de sécurité. Si la
+#:    règle de durée venait à ne pas purger — un `frame_index` qui ne
+#:    progresse pas, une pause, un test qui fige le compteur — la liste ne peut
+#:    pas croître sans fin. 200 boîtes vertes à l'écran seraient absurdes et
+#:    illisibles ; en mémoire cela ne fait que ~200 tuples, quelques dizaines de
+#:    kilo-octets, donc ce plafond ne coûte rien et garantit qu'aucune fuite
+#:    n'est possible.
+#:
+#: Pourquoi 200 : à 256 personnes sur 3000 frames, il y a en moyenne 0,085
+#: comptage par frame. Une durée de 145 frames donne donc ~12 boîtes vivantes
+#: en régime normal. 200 est un ordre de grandeur au-dessus : le plafond ne
+#: se déclenche jamais sur une analyse réelle, ce qui est exactement ce qu'on
+#: veut d'un filet de sécurité — s'il se déclenchait, il masquerait un bug au
+#: lieu de l'empêcher.
+TAILLE_MAX_BOITES_COMPTES = 200
 
 #: Durée de vidéo ANALYSÉE au-delà de laquelle un compteur resté à zéro doit
 #: être signalé. Exprimé en SECONDES DE VIDÉO et non en frames affichées :
@@ -154,6 +178,14 @@ class FenetrePrincipale(QMainWindow):
         self._index_affiche = -1
         #: Position du marqueur de premier point, en pixels image.
         self._apercu_point: tuple[int, int] | None = None
+        #: Boîtes VERTES des personnes comptées, encore à l'écran.
+        #:
+        #: Ce n'est PAS du tracking : les tracks sont lâchés au franchissement
+        #: (`_purger_franchis`), donc il n'y a rien à suivre. C'est une simple
+        #: liste de tuples `(frame_comptage, x1, y1, x2, y2)` que l'overlay
+        #: dessine sans la mettre à jour. Bornée en durée ET en nombre — voir
+        #: `DUREE_BOITE_COMPTEE_FRAMES` et `TAILLE_MAX_BOITES_COMPTES`.
+        self._boites_comptees: list[tuple[int, float, float, float, float]] = []
 
         self._construire()
         self._connecter()
@@ -198,8 +230,8 @@ class FenetrePrincipale(QMainWindow):
         # de l'affichage : deux chiffres que l'opérateur ne regardait jamais,
         # et qui occupaient la place sous le seul chiffre qui compte. Les
         # VALEURS restent calculées — `maj_compteurs` continue de les
-        # mémoriser, et le rapport comme l'export en dépendent. On ne retire
-        # que l'étiquette.
+        # mémoriser, et le récapitulatif de fin d'analyse en dépendent. On ne
+        # retire que l'étiquette.
 
         # Le périphérique de calcul est affiché EN PERMANENCE, dans son PROPRE
         # label et non dans `label_statut`.
@@ -288,14 +320,12 @@ class FenetrePrincipale(QMainWindow):
         self.btn_lancer.setObjectName("primaire")
         self.btn_pause = QPushButton("Pause")
         self.btn_stop = QPushButton("Stop")
-        self.btn_export = QPushButton("Exporter")
         for b in (
             self.btn_video,
             self.btn_ligne,
             self.btn_lancer,
             self.btn_pause,
             self.btn_stop,
-            self.btn_export,
         ):
             barre.addWidget(b)
         colonne.addLayout(barre)
@@ -344,7 +374,6 @@ class FenetrePrincipale(QMainWindow):
         self.btn_lancer.clicked.connect(self.lancer)
         self.btn_pause.clicked.connect(self._basculer_pause)
         self.btn_stop.clicked.connect(self.arreter)
-        self.btn_export.clicked.connect(self._on_exporter)
         self.video.clic.connect(self._on_clic_video)
         self.panneau.config_modifiee.connect(self._sur_config)
         self.choix_vitesse.currentTextChanged.connect(self._appliquer_vitesse)
@@ -488,6 +517,10 @@ class FenetrePrincipale(QMainWindow):
         self._resultat_courant = None
         self._index_affiche = -1
         self._flash = 0
+        # Les boîtes vertes de l'analyse précédente appartiennent à la vidéo
+        # précédente : les laisser afficher sur la nouvelle donnerait à
+        # l'opérateur des personnes qui n'existent pas dans cette scène.
+        self._boites_comptees.clear()
         # Nouvelle vidéo : l'ancienne ligne était verrouillée pour l'analyse
         # qui vient de s'arrêter. Sans ce déverrouillage, l'opérateur ne
         # pourrait plus la déplacer, et le bouton « Tracer la ligne » échouerait
@@ -582,7 +615,8 @@ class FenetrePrincipale(QMainWindow):
                 epaisseur=self.config.epaisseur_bande,
                 sens=self.config.sens,
                 hysteresis=self.config.frames_hysteresis,
-                bande_detection_px=BANDE_DETECTION_PX,
+                bande_avant_px=BANDE_AVANT_PX,
+                bande_apres_px=BANDE_APRES_PX,
             )
         except ValueError as exc:
             self._points_ligne = []
@@ -702,7 +736,8 @@ class FenetrePrincipale(QMainWindow):
                     epaisseur=config.epaisseur_bande,
                     sens=config.sens,
                     hysteresis=config.frames_hysteresis,
-                    bande_detection_px=BANDE_DETECTION_PX,
+                    bande_avant_px=BANDE_AVANT_PX,
+                bande_apres_px=BANDE_APRES_PX,
                 )
             except ValueError as exc:
                 # Réglage devenu impossible (épaisseur 0, sens nul) : on garde
@@ -795,6 +830,7 @@ class FenetrePrincipale(QMainWindow):
         self._resultat_courant = None
         self._index_affiche = -1
         self._flash = 0
+        self._boites_comptees.clear()
         # « Une fois par analyse » : le compteur repart de zéro ici, donc le
         # rappel doit pouvoir se redéployer. La réouverture de session après
         # une pause NE le réarme pas : sans cela, chaque reprise en pause le
@@ -825,7 +861,8 @@ class FenetrePrincipale(QMainWindow):
                 epaisseur=self.config.epaisseur_bande,
                 sens=self.config.sens,
                 hysteresis=self.config.frames_hysteresis,
-                bande_detection_px=BANDE_DETECTION_PX,
+                bande_avant_px=BANDE_AVANT_PX,
+                bande_apres_px=BANDE_APRES_PX,
             )
         except ValueError as exc:
             self._signaler("Ligne invalide", str(exc), grave=True)
@@ -922,7 +959,6 @@ class FenetrePrincipale(QMainWindow):
         self.btn_lancer.setEnabled(pret and not self._en_analyse)
         self.btn_pause.setEnabled(self._session_ouverte)
         self.btn_stop.setEnabled(self._session_ouverte)
-        self.btn_export.setEnabled(self.compteur is not None)
 
     # -- Boucle de lecture ------------------------------------------------
 
@@ -967,6 +1003,7 @@ class FenetrePrincipale(QMainWindow):
         if self._flash > 0:
             self._flash -= 1
 
+        self._boites_comptees = self._boites_comptees_a_afficher(resultat)
         self.maj_compteurs(resultat.total, resultat.presents, self.frames)
         self.video.definir_image(
             dessiner(
@@ -975,8 +1012,70 @@ class FenetrePrincipale(QMainWindow):
                 self.ligne,
                 afficher_ids=False,
                 flash=flash,
+                boites_comptees=self._boites_comptees,
             )
         )
+
+    def _boites_comptees_a_afficher(
+        self, resultat
+    ) -> list[tuple[int, float, float, float, float]]:
+        """Les boîtes vertes encore visibles à cette frame, les plus récentes en
+        tête.
+
+        **Deux bornes, et chacune rattrape la défaillance de l'autre.**
+
+        - **La durée** (`DUREE_BOITE_COMPTEE_FRAMES`) décide de la vie d'une
+          boîte : 145 frames, soit le temps que la personne met à traverser les
+          100 px de bande situés après la ligne. Passé ce délai elle n'est plus
+          dans la zone, la garder n'apprend rien à l'opérateur.
+        - **Le nombre** (`TAILLE_MAX_BOITES_COMPTES`) est le filet : si la règle
+          de durée ne purgeait pas — `frame_index` figé, compteur de test qui ne
+          progresse pas — la liste ne pourrait pas croître sans fin.
+
+        **Pourquoi les frames TRAITÉES et non affichées.** À 0,25x, l'opérateur
+        voit 7 images par seconde mais le moteur en traite 25. Une durée
+        exprimée en frames affichées ferait disparaître la boîte en 7/25 du
+        temps voulu — un clignotement à l'œil, précisément ce que la couleur
+        verte doit éviter. En frames traitées, la boîte reste visible le temps
+        réel de la vidéo, quelle que soit la vitesse de présentation.
+
+        **`frame_index` avance de 1 par frame traitée**, donc purger
+        ici — sur la frame affichée — laisse au pire quelques frames de retard
+        sur une frame dont le traitement a été plus lent que l'affichage. Sans
+        importance : c'est une impureté visuelle de quelques pixels, jamais une
+        erreur de décompte.
+
+        On filtre par l'index de frame de chaque boîte, pas en purgeant la
+        liste sur place : la liste retournée est celle que l'overlay dessine,
+        et une liste mutée en place pendant que l'overlay la parcourt serait
+        une course. Le tri par `reverse` donne les plus récentes d'abord, donc
+        un dépassement de `TAILLE_MAX_BOITES_COMPTES` sacrifie les plus
+        anciennes — celles que l'opérateur a déjà eu le temps de voir.
+        """
+        # On accumule dans une liste LOCALE, et la borne est appliquée AVANT
+        # d'écrire dans `self._boites_comptees`. Accumuler directement dans
+        # l'attribut ferait dépendre la mémoire de l'appelant : il suffirait
+        # d'appeler cette méthode sans réassigner son résultat pour que la
+        # liste grossisse sans fin. La borne est donc une propriété de la
+        # méthode, pas une promesse faite à celui qui l'appelle.
+        accumulees = list(self._boites_comptees)
+        for ev in getattr(resultat, "evenements", None) or []:
+            if ev.bbox is not None:
+                accumulees.append((ev.frame, *ev.bbox))
+
+        # La borne de durée est la règle normale. `frame_index` avance de 1 par
+        # frame traitée : une boîte vit exactement DUREE_BOITE_COMPTEE_FRAMES
+        # frames, puis s'efface.
+        frame = resultat.frame_index
+        vivantes = [
+            boite
+            for boite in accumulees
+            if frame - boite[0] <= DUREE_BOITE_COMPTEE_FRAMES
+        ]
+        # La plus récente d'abord : un dépassement du plafond sacrifie alors les
+        # plus anciennes, celles que l'opérateur a déjà eu le temps de voir.
+        vivantes.sort(key=lambda boite: boite[0], reverse=True)
+        return vivantes[:TAILLE_MAX_BOITES_COMPTES]
 
     def _appliquer_vitesse(self, _texte: str | None = None) -> None:
         """Règle la cadence d'AFFICHAGE. Ne touche jamais au traitement.
@@ -1060,11 +1159,15 @@ class FenetrePrincipale(QMainWindow):
         log.info("avertissement « 0 compté » : vérifier le sens de la ligne")
 
     def _afficher_bilan(self) -> None:
-        """Bilan de fin de lecture, sans dépendre de `compteur.rapport`.
+        """Bilan de fin de lecture, dans la barre de statut.
 
-        Les statistiques sont calculées ici à partir du `Resultat` : la fenêtre
-        ne doit pas dépendre d'un module livré par une autre tâche pour
-        afficher un résumé.
+        Les chiffres sont calculés ici à partir du `Resultat`, sans passer par
+        `compteur.rapport` : c'est un résumé d'une ligne, pas le récapitulatif
+        complet — celui-ci est dessiné par `PanneauRecap`, appelé par
+        `arreter()`.
+
+        L'export a été supprimé, donc ce texte ne propose plus rien à
+        exporter : il annonce le résultat et s'arrête là.
         """
         if self.compteur is None:
             return
@@ -1077,61 +1180,8 @@ class FenetrePrincipale(QMainWindow):
             f"Terminé — {resultat.total} personnes, "
             f"{par_minute:.1f}/min, "
             f"max {resultat.presents_max} présents, "
-            f"{resultat.presents_moyen:.1f} en moyenne.\n"
-            "Pense à exporter le décompte."
+            f"{resultat.presents_moyen:.1f} en moyenne."
         )
-
-    # -- Export ------------------------------------------------------------
-
-    def _on_exporter(self) -> None:
-        dossier = QFileDialog.getExistingDirectory(
-            self, "Dossier de sortie", DOSSIER_EXPORT_DEFAUT
-        )
-        if dossier:
-            self.exporter(dossier)
-
-    def exporter(self, dossier: str) -> bool:
-        """Écrit le CSV et le JSON du décompte dans ``dossier``.
-
-        Le module `compteur.rapport` est importé À L'INTÉRIEUR de la méthode :
-        s'il n'est pas encore livré, l'export refuse en displaying pourquoi au
-        lieu de faire tomber la fenêtre entière sur un clic.
-        """
-        if self.compteur is None or self.video_finiment is None:
-            self._signaler(
-                "Rien à exporter", "Lance d'abord une analyse sur une vidéo."
-            )
-            return False
-
-        try:
-            from compteur.rapport import (
-                chemins_par_defaut,
-                ecrire_csv,
-                ecrire_json,
-            )
-        except ImportError as exc:
-            self._signaler(
-                "Export indisponible",
-                f"Le module d'export n'est pas disponible ({exc}).",
-            )
-            return False
-
-        try:
-            resultat = self.compteur.resultat(
-                self.config.modele, self.frames, self.frames / self._fps()
-            )
-            chemins = chemins_par_defaut(str(self.video_finiment), dossier)
-            ecrire_csv(resultat, chemins["csv"])
-            ecrire_json(resultat, chemins["json"])
-        except Exception as exc:  # noqa: BLE001 — un disque plein ne doit pas fermer l'app
-            self._signaler("Export impossible", str(exc), grave=True)
-            return False
-
-        self.label_statut.setText(
-            f"Exporté :\n{chemins['csv'].name}\n{chemins['json'].name}\n"
-            f"(dossier {dossier})"
-        )
-        return True
 
     # -- Fermeture --------------------------------------------------------
 

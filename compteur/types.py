@@ -59,9 +59,17 @@ class Evenement:
     x: float
     y: float
     track_id: int
-
-    def vers_ligne_csv(self) -> str:
-        return f"{self.frame},{self.timestamp_s:.3f},{self.x:.1f},{self.y:.1f},{self.track_id}"
+    # Boîte de la personne AU MOMENT du franchissement, en pixels image.
+    #
+    # Elle ne sert qu'à l'affichage post-comptage (la boîte verte). Elle est
+    # donc optionnelle : un `Evenement` construit à la main — un test, un
+    # script — n'a pas de boîte à peindre, et doit rester constructible sans.
+    #
+    # Elle est stockée et non suivis : le track est lâché au franchissement
+    # (optimisation validée de la tâche 19), donc la boîte est le SEUL vestige
+    # de cette personne après le compte. C'est de la mémoire d'affichage, pas
+    # du tracking — voir `interface.app._boites_comptees`.
+    bbox: tuple[float, float, float, float] | None = None
 
 
 @dataclass

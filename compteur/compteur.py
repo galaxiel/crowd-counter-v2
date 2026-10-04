@@ -13,7 +13,7 @@ from typing import Callable
 
 import numpy as np
 
-from .config import BANDE_DETECTION_PX, Config
+from .config import BANDE_APRES_PX, BANDE_AVANT_PX, DUREE_BOITE_COMPTEE_FRAMES, Config
 from .detecteur import Detecteur, charger_modele
 from .ligne import Ligne
 from .tracker import Tracker
@@ -296,6 +296,11 @@ class Compteur:
                 x=t.center[0],
                 y=t.center[1],
                 track_id=identifiant,
+                # La boîte est figée ICI, au moment du compte. C'est le dernier
+                # instant où cette personne existe côté tracker : dès la frame
+                # suivante, `_purger_franchis` a vidé son état. Sans cette
+                # copie, l'affichage n'aurait plus rien à peindre en vert.
+                bbox=tuple(t.bbox),
             )
             self.evenements.append(ev)
             nouveaux.append(ev)
@@ -406,7 +411,8 @@ def analyser_video(
                 # elle est donc passée ici au même titre que l'épaisseur. C'est
                 # ce qui fait qu'une analyse hors interface rogne exactement
                 # comme celle de la fenêtre.
-                bande_detection_px=BANDE_DETECTION_PX,
+                bande_avant_px=BANDE_AVANT_PX,
+                bande_apres_px=BANDE_APRES_PX,
             )
         )
 

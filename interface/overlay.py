@@ -38,6 +38,17 @@ COULEUR_TEXTE = (255, 255, 255)
 # Flash de comptage : rouge saturé, l'alerte la plus urgent(e) à capter du
 # coin de l'œil quand un groupe passe.
 COULEUR_FLASH = (80, 80, 240)
+# Boîte d'une personne COMPTÉE : vert franc. C'est la couleur la plus
+# distinctive de l'écran — l'ambre des détections et le jaune-vert des centres
+# de track s'en rapprochent, le vert pur non.
+#
+# **Ce que la couleur rend visible.** Le compteur peut se tromper en ratant
+# quelqu'un, et il ne le dira pas : le total est juste un nombre. Or une
+# personne qui traverse la ligne SANS que sa boîte devienne verte est un raté
+# que l'opérateur voit immédiatement. C'est le seul moyen de détecter une
+# erreur sans vérité terrain — on ne peut pas recompter à la main chaque
+# vidéo, mais on peut regarder 20 secondes et voir si tout le monde verdit.
+COULEUR_COMPTEE = (60, 220, 60)
 
 
 def dessiner(
@@ -46,11 +57,18 @@ def dessiner(
     ligne: "Ligne | None" = None,
     afficher_ids: bool = True,
     flash: bool = False,
+    boites_comptees: "list[tuple[int, float, float, float, float]] | None" = None,
 ) -> np.ndarray:
     """Retourne une copie annotée. ``img`` n'est jamais modifiée.
 
     ``img`` et ``resultat.image`` sont normalement le même tableau ; la copie
     protectrice est faite ici, elle n'a pas à être faite par l'appelant.
+
+    ``boites_comptees`` est une liste de `(frame_comptage, x1, y1, x2, y2)`
+    déjà bornée en durée et en nombre par l'appelant. Ce module ne la purge
+    pas et ne la décide pas : il ne fait que la peindre. Une boîte verte est
+    donc peinte à sa POSITION de franchissement, pas à la position courante de
+    la personne — c'est voulu, la personne a été lâchée à cet instant.
     """
     sortie = _copie_de_travail(img)
 
@@ -63,6 +81,14 @@ def dessiner(
 
     for d in getattr(resultat, "detections", None) or []:
         _boite(sortie, d.x1, d.y1, d.x2, d.y2, COULEUR_BOITE)
+
+    # Boîtes VERTES des personnes comptées. Dessinées après les détections et
+    # AVANT les centres de track : une personne comptée est encore détectée
+    # (elle n'a fait que passer la ligne), donc sa boîte d'ambre est encore là
+    # — le vert doit passer AU-DESSUS, sinon le raté resterait invisible, ce
+    # qui viderait la couleur de son but.
+    for _frame, x1, y1, x2, y2 in boites_comptees or []:
+        _boite(sortie, x1, y1, x2, y2, COULEUR_COMPTEE)
 
     for t in getattr(resultat, "tracks", None) or []:
         cx, cy = int(t.center[0]), int(t.center[1])

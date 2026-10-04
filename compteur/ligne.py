@@ -11,7 +11,7 @@ import math
 
 import numpy as np
 
-from .config import BANDE_DETECTION_PX, FACTEUR_VOILE
+from .config import BANDE_APRES_PX, BANDE_AVANT_PX, FACTEUR_VOILE
 
 #: Orientation d'une ligne, telle que l'interface la nomme.
 #:
@@ -66,7 +66,8 @@ class Ligne:
         epaisseur: int = 30,
         sens: int = 1,
         hysteresis: int = 2,
-        bande_detection_px: int | None = None,
+        bande_avant_px: int | None = None,
+        bande_apres_px: int | None = None,
     ) -> None:
         p1 = (float(p1[0]), float(p1[1]))
         p2 = (float(p2[0]), float(p2[1]))
@@ -79,8 +80,12 @@ class Ligne:
             raise ValueError("l'épaisseur doit être >= 1")
         if hysteresis < 0:
             raise ValueError("l'hystérésis doit être >= 0")
-        if bande_detection_px is not None and bande_detection_px < 1:
-            raise ValueError("la bande de détection doit faire >= 1 px")
+        for valeur, nom in (
+            (bande_avant_px, "la bande avant"),
+            (bande_apres_px, "la bande après"),
+        ):
+            if valeur is not None and valeur < 1:
+                raise ValueError(f"{nom} doit faire >= 1 px")
 
         self.p1 = p1
         self.p2 = p2
@@ -89,13 +94,27 @@ class Ligne:
         # Valide et exposé pour la tache 5 (anti-rebond du comptage) qui le lit
         # via ligne.hysteresis ; la geometrie de ce module ne s'en sert pas.
         self.hysteresis = int(hysteresis)
-        # Largeur de la bande sur laquelle le modèle est appliqué, en pixels de
-        # l'image native. PAS un réglage séparé : c'est un attribut de la ligne,
-        # elle se déplace donc AVEC elle et ne peut pas en être détachée.
-        # `None` signifie « pas de bande » : le modèle voit l'image entière.
-        self.bande_detection_px = (
-            None if bande_detection_px is None else int(bande_detection_px)
-        )
+        # Profondeur de la bande de détection de CHAQUE côté de la ligne, en
+        # pixels de l'image native. PAS deux réglages séparés : ce sont des
+        # attributs de la ligne, elle se déplace donc AVEC elle et ils ne
+        # peuvent pas en être détachés.
+        #
+        # La bande est DISSYMÉTRIQUE : `bande_avant_px` (côté de DÉPART,
+        # coordonnée positive sur la normale — voir `point_du_cote`) est plus
+        # large que `bande_apres_px` (côté d'arrivée). Le tracker a besoin
+        # d'espace pour construire une identité AVANT le franchissement ; après,
+        # le compte est fait et 100 px suffisent à voir la personne passer.
+        #
+        # `None` des deux côtés signifie « pas de bande » : le modèle voit
+        # l'image entière. C'est le seul cas qui désactive le rognage — un
+        # `None` d'un seul côté serait une bande d'un seul côté, ce qui n'a pas
+        # de sens et rendrait le franchissement invisible au modèle.
+        self.bande_avant_px = None if bande_avant_px is None else int(bande_avant_px)
+        self.bande_apres_px = None if bande_apres_px is None else int(bande_apres_px)
+        if (self.bande_avant_px is None) != (self.bande_apres_px is None):
+            raise ValueError(
+                "la bande de détection se règle des deux côtés ou pas du tout"
+            )
         # Verrou de l'opérateur : une fois l'analyse lancée, la ligne et sa
         # bande cessent de bouger. Sans cela, un réglage glissé pendant la
         # lecture déplacerait la zone de comptage sous les yeux de celui qui
@@ -103,6 +122,7 @@ class Ligne:
         # même vidéo.
         self.verrouillee = False
         self._recalculer_geometrie()
+
 
     def _recalculer_geometrie(self) -> None:
         """Recalcule les vecteurs dérivés de ``p1``/``p2``.
@@ -174,14 +194,35 @@ class Ligne:
         il reçoit un rectangle. Cette séparation est vérifiée par un test
         d'isolation.
 
-        La bande fait `bande_detection_px` pixels AU TOTAL, centrés sur la
-        ligne : de ``x_ligne - 100`` à ``x_ligne + 100`` pour une ligne
-        verticale. Elle est orientée par la NORMALE, donc elle suit une ligne
-        diagonale aussi bien qu'une verticale — c'est le rectangle englobant
-        qui sert au rognage, plus grand que la bande elle-même sur une
-        diagonale. Compromis assumé : un rognage d'image est droit, il ne peut
-        pas être oblique ; on rogne donc le rectangle qui CONTIENT la bande,
-        jamais moins.
+        **La bande est DISSYMÉTRIQUE.** Elle s'étend de `bande_avant_px` sur le
+        côté de DÉPART (coordonnée positive sur la normale) à `bande_apres_px`
+        sur le côté d'ARRIVÉE — 200 / 100 px en production, donc 300 px au
+        total et non 200.
+
+        **Quel côté est « avant », et pourquoi c'est le côté de départ.** Le
+        vocabulaire est celui de `point_du_cote` : côté de départ = coordonnée
+        **positive**, côté d'arrivée = coordonnée **négative**, quel que soit
+        `sens`. Les gens arrivent par le côté de départ ; c'est là que le
+        tracker a besoin d'espace pour CONSTUIRE une identité fiable sur
+        plusieurs frames. Après le franchissement, le compte est fait et cette
+        personne ne peut plus jamais compter (`a_traverse` exige un côté de
+        départ strictement positif) : il ne reste qu'à la voir s'éloigner, ce
+        que 100 px suffisent à montrer.
+
+        **L'implémentation est donc entièrement en coordonnées projetées.** On
+        décale chaque extrémité du segment de `+avant` et de `-apres` le long de
+        la NORMALE — pas « vers la gauche » / « vers la droite ». Le signe des
+        deux décalages est fixe, et c'est ce qui rend la bande dissymétrique
+        dans le bon sens quel que soit le `sens` : un décalage « vers -n »
+        donnerait une bande inversée, donc 100 px avant et 200 px après pour
+        `sens=-1`, exactement à l'opposé de ce qu'on veut.
+
+        Elle est orientée par la NORMALE, donc elle suit une ligne diagonale
+        aussi bien qu'une verticale — c'est le rectangle englobant qui sert au
+        rognage, plus grand que la bande elle-même sur une diagonale.
+        Compromis assumé : un rognage d'image est droit, il ne peut pas être
+        oblique ; on rogne donc le rectangle qui CONTIENT la bande, jamais
+        moins.
 
         **Rogne, ne déborde pas.** Chaque bord est ramené dans l'image : une
         ligne près du bord de gauche donne une bande qui commence à 0, pas une
@@ -197,21 +238,20 @@ class Ligne:
         le modèle, et il n'y a rien à gagner puisque personne ne franchira une
         ligne invisible.
         """
-        if self.bande_detection_px is None:
+        if self.bande_avant_px is None:
             return None
         largeur_image = int(largeur_image)
         hauteur_image = int(hauteur_image)
         if largeur_image <= 0 or hauteur_image <= 0:
             return None
 
-        demi = self.bande_detection_px / 2.0
-        # Les deux extrémités du segment, décalées de ±demi sur la normale :
-        # ce sont les deux bords de la bande. On prend le rectangle englobant
-        # de ces quatre coins.
+        # Les deux extrémités du segment, décalées de +avant et -apres sur la
+        # normale : ce sont les deux bords de la bande. On prend le rectangle
+        # englobant de ces quatre coins.
         nx, ny = self._n
         coins = [
-            (px + nx * demi * signe, py + ny * demi * signe)
-            for signe in (1.0, -1.0)
+            (px + nx * decalage, py + ny * decalage)
+            for decalage in (float(self.bande_avant_px), -float(self.bande_apres_px))
             for (px, py) in (self.p1, self.p2)
         ]
 
@@ -223,6 +263,7 @@ class Ligne:
         if x2 <= x1 or y2 <= y1:
             return None
         return (x1, y1, x2, y2)
+
 
     # -- Géométrie -------------------------------------------------------
 
@@ -405,9 +446,9 @@ class Ligne:
         et l'opérateur ne voit plus ce que le modèle a trouvé. `overlay.dessiner`
         applique donc le voile en premier, sur l'image nue.
 
-        Sans bande (``bande_detection_px is None``, ou bande entièrement hors
-        cadre) l'image est rendue telle quelle : il n'y a rien à mettre en
-        évidence, et noircir l'écran entier n'indiquerait aucune zone.
+        Sans bande (`bande_avant_px is None`, ou bande entièrement hors cadre)
+        l'image est rendue telle quelle : il n'y a rien à mettre en évidence,
+        et noircir l'écran entier n'indiquerait aucune zone.
         """
         hauteur, largeur = img.shape[:2]
         rect = self.rect_bande_detection(largeur, hauteur)

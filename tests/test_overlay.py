@@ -167,3 +167,41 @@ def test_les_boites_se_voient_sur_fond_clair():
     r = FrameResult(image=img, detections=[Detection(100, 100, 140, 160, 0.9, 0)])
     sortie = dessiner(img, r)
     assert not np.array_equal(sortie, img)
+
+
+# -- La boîte verte d'une personne comptée ----------------------------------
+
+
+def test_une_boite_comptee_est_peinte_en_vert():
+    """Le raté devient visible : une personne qui traverse sans verdir est un
+    défaut que l'opérateur voit, et qu'aucun chiffre ne signalerait.
+
+    On vérifie les trois choses qui font que la couleur sert à quelque chose :
+    elle est VERTE (pas la couleur d'ambre des détections), elle est POSÉE là
+    où la personne a été comptée, et elle passe AU-DESSUS de la boîte de
+    détection — une personne comptée est encore détectée, donc une boîte
+    d'ambre existe forcément au même endroit. Dessinée en dessous, le vert
+    serait masqué et la couleur ne signalerait rien du tout.
+    """
+    from interface.overlay import COULEUR_BOITE, COULEUR_COMPTEE
+
+    img = np.zeros((240, 320, 3), dtype=np.uint8)
+    r = FrameResult(
+        image=img,
+        # La personne est ENCORE détectée : c'est le cas réel de tout comptage.
+        detections=[Detection(100, 100, 140, 160, 0.9, 0)],
+    )
+    # Les boîtes sont des CONTOURS, pas des aplats : on lit donc sur le bord
+    # supérieur de chacune, pas en son milieu. Elles ne se recouvrent pas —
+    # l'ambre en y=100, le vert en y=40 — donc chaque lecture est non ambiguë.
+    boites = [(0, 100.0, 40.0, 140.0, 80.0)]
+
+    sortie = dessiner(img, r, boites_comptees=boites)
+
+    assert (sortie[40, 120] == np.array(COULEUR_COMPTEE, dtype=np.uint8)).all(), (
+        "la boîte comptée n'est pas verte"
+    )
+    assert (sortie[100, 120] == np.array(COULEUR_BOITE, dtype=np.uint8)).all(), (
+        "la boîte de détection doit rester ambre : elle distingue le détecté "
+        "du compté"
+    )

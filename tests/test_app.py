@@ -252,7 +252,6 @@ def test_lancer_desactive_tant_qu_aucune_video_nest_chargee(application, fenetre
     assert not fenetre.btn_ligne.isEnabled()
     assert not fenetre.btn_pause.isEnabled()
     assert not fenetre.btn_stop.isEnabled()
-    assert not fenetre.btn_export.isEnabled()
 
 
 def test_lancer_desactive_tant_que_la_ligne_nest_pas_tracee(
@@ -478,7 +477,6 @@ def test_fin_de_video_met_en_pause_et_affiche_le_bilan(
         avancer(f)
     assert f._en_analyse is False
     assert not f._timer_traitement.isActive()
-    assert f.btn_export.isEnabled()
     assert "Terminé" in f.label_statut.text()
 
 
@@ -593,49 +591,6 @@ def test_affichage_ne_redessine_pas_la_meme_frame_deux_fois(
     # Un appel d'affichage supplémentaire sans frame neuve ne redessine rien.
     f._afficher()
     assert len(vues) == 3
-
-
-# -- Export ---------------------------------------------------------------
-
-
-def test_export_sans_video_refuse(application, tmp_path):
-    f = FenetrePrincipale()
-    assert f.exporter(str(tmp_path)) is False
-
-
-def test_export_apres_analyse(application, fenetre, tmp_path, video_synthetique):
-    """L'export dépend de `compteur/rapport.py`, livré par la tâche 6.
-
-    Tant que ce module n'existe pas, la fenêtre doit le dire et refuser — pas
-    lever `ImportError` au clic. Le test s'adapte donc à ce qui est réellement
-    livré, plutôt que d'exiger un module d'une autre tâche.
-    """
-    f = fenetre
-    f.charger_video(str(video_synthetique))
-    f.compteur = FauxCompteur()
-    f._ouvrir_session()
-    avancer(f, 10)
-    dossier = tmp_path / "sortie"
-    dossier.mkdir()
-
-    try:
-        import compteur.rapport as rapport
-    except ImportError:
-        rapport = None
-
-    if rapport is None:
-        # Module absent : export refusé, message explicite, aucune exception.
-        assert f.exporter(str(dossier)) is False
-        assert "rapport" in f.label_statut.text().lower() or "export" in (
-            f.label_statut.text().lower()
-        )
-        return
-
-    assert f.exporter(str(dossier)) is True
-    chemins = rapport.chemins_par_defaut(str(video_synthetique), str(dossier))
-    assert chemins["csv"].exists()
-    assert chemins["json"].exists()
-    assert "Exporté" in f.label_statut.text()
 
 
 # -- Réglages -------------------------------------------------------------
@@ -959,3 +914,76 @@ def test_avertissement_sens_ne_saffiche_pas_hors_analyse(
     assert f._session_ouverte is False
     f.maj_compteurs(total=0, presents=0, frames=500)
     assert avertissement_visible(f) is False
+
+
+# -- Export supprimé, boîtes vertes bornées --------------------------------
+
+
+def test_il_ne_reste_plus_rien_a_exporter(application, fenetre):
+    """L'export est SUPPRIMÉ, pas masqué.
+
+    On ne vérifie pas seulement que le bouton a disparu de la barre : un bouton
+    caché qui fonctionne encore est un export qui existe. Les trois voies sont
+    donc fermées — l'attribut, la méthode de dialogue, et la méthode
+    d'écriture — et la compilation du module doit rester possible sans
+    `compteur.rapport`, dont plus rien n'est chargé au clic.
+
+    Le récapitulatif, lui, doit SURVIVRE : c'est lui qui affiche les chiffres,
+    et il s'appuie sur `rapport.statistiques`. C'est la raison pour laquelle
+    `compteur/rapport.py` n'a été amputé que de l'écriture de fichiers.
+    """
+    import compteur.rapport as rapport
+
+    f = fenetre
+    assert not hasattr(f, "btn_export"), "le bouton Exporter doit avoir disparu"
+    assert not hasattr(f, "exporter"), "la méthode d'export doit avoir disparu"
+    assert not hasattr(f, "_on_exporter")
+    # Le module est réduit à la COMPUTATION des chiffres : plus rien n'écrit.
+    assert not hasattr(rapport, "ecrire_csv")
+    assert not hasattr(rapport, "ecrire_json")
+    assert callable(rapport.statistiques), "le récapitulatif en dépend"
+
+
+def test_la_liste_des_boites_comptees_est_bornee(application, fenetre):
+    """La mémoire d'affichage ne peut pas grossir sans borne.
+
+    Les tracks sont lâchés au franchissement : rien ne viendrait purger cette
+    liste à leur place. Sans borne explicite, une analyse de dix mille passages
+    laisserait dix mille boîtes à l'écran — illisible, et la seule trace d'un
+    défaut de purge.
+
+    On éprouve les DEUX bornes séparément : la durée fait disparaître une boîte
+    âgée, et le plafond en nombre résiste même quand la durée ne purge rien
+    (ici, tous les comptages sur la même frame).
+    """
+    from compteur.config import DUREE_BOITE_COMPTEE_FRAMES
+    from interface.app import TAILLE_MAX_BOITES_COMPTES
+
+    f = fenetre
+    img = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    def frame(index, evenements):
+        return FrameResult(image=img, frame_index=index, evenements=evenements)
+
+    def evenement(frame_index):
+        return Evenement(
+            frame=frame_index,
+            timestamp_s=frame_index / 25.0,
+            x=100.0,
+            y=100.0,
+            track_id=frame_index,
+            bbox=(90.0, 90.0, 110.0, 110.0),
+        )
+
+    # Une boîte comptée à la frame 0 est encore là bien après le comptage…
+    f._boites_comptees_a_afficher(frame(0, [evenement(0)]))
+    # … et a disparu une fois son délai de visibilité dépassé.
+    assert f._boites_comptees_a_afficher(
+        frame(DUREE_BOITE_COMPTEE_FRAMES + 1, [])
+    ) == []
+
+    # Le plafond en nombre tient même si rien n'expire : 300 comptages sur une
+    # seule frame ne peuvent pas produire plus de 200 boîtes à l'écran.
+    for i in range(300):
+        f._boites_comptees_a_afficher(frame(0, [evenement(i)]))
+    assert len(f._boites_comptees) <= TAILLE_MAX_BOITES_COMPTES
