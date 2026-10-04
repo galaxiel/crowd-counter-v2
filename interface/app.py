@@ -70,6 +70,7 @@ from interface.panneau_reglages import (
     PanneauReglages,
     orientation_par_defaut_sens,
 )
+from interface.recap import PanneauRecap
 from interface.style import appliquer_style  # noqa: F401  (ré-export pour main.py)
 from interface.widgets_video import WidgetVideo
 
@@ -240,6 +241,18 @@ class FenetrePrincipale(QMainWindow):
         self.label_statut.setWordWrap(True)
         self.label_statut.setMinimumHeight(56)
         colonne.addWidget(self.label_statut)
+
+        # Le récapitulatif de fin d'analyse est une SECTION de la colonne de
+        # droite, pas un onglet. La fenêtre n'a pas d'organisation par onglets
+        # — elle a une colonne d'affichage et une colonne de réglages — et un
+        # QTabWidget aurait imposé de choisir à chaque instant entre la vidéo
+        # et son bilan : l'opérateur ne verrait plus la scène en lisant le
+        # décompte. Une section masquée jusqu'à la fin de l'analyse garde les
+        # deux visibles en même temps, et ne coûte aucune place avant qu'il y
+        # ait quelque chose à montrer.
+        self.recap = PanneauRecap()
+        self.recap.setVisible(False)
+        colonne.addWidget(self.recap, stretch=1)
 
         self.panneau = PanneauReglages(self.config)
         # Le panneau est dans une zone défilante, et la zone reste nécessaire
@@ -481,6 +494,10 @@ class FenetrePrincipale(QMainWindow):
         # silencieusement.
         if self.ligne is not None:
             self.ligne.deverrouiller()
+        # Le récapitulatif concernait l'analyse précédente : il n'a plus de
+        # rapport avec cette vidéo-ci et disparaît avec elle.
+        self.recap.effacer()
+        self.recap.setVisible(False)
         self.maj_compteurs(0, 0, 0)
 
     def _afficher_premiere_frame(self) -> None:
@@ -783,6 +800,11 @@ class FenetrePrincipale(QMainWindow):
         # une pause NE le réarme pas : sans cela, chaque reprise en pause le
         # ferait clignoter, alors que l'opérateur n'a pas relancé d'analyse.
         self._avertissement_sens_affiche = False
+        # Le récapitulatif de l'analyse PRÉCÉDENTE disparaît ici. Le laisser en
+        # place pendant qu'un nouveau décompte démarre ferait lire l'ancien
+        # total et l'ancienne courbe comme s'ils étaient en cours.
+        self.recap.effacer()
+        self.recap.setVisible(False)
         self._ouvrir_session()
         self._maj_boutons()
         self.label_statut.setText("Analyse en cours…")
@@ -836,7 +858,19 @@ class FenetrePrincipale(QMainWindow):
         self._maj_boutons()
 
     def arreter(self) -> None:
-        """Ferme la session d'analyse et rend la main à l'opérateur."""
+        """Ferme la session d'analyse et rend la main à l'opérateur.
+
+        Le récapitulatif s'affiche ici, et pas seulement en fin de lecture : un
+        opérateur qui coupe au bout de trente secondes — parce que la scène a
+        changé, ou qu'il a assez de matière — doit retrouver ses chiffres sans
+        avoir à laisser la vidéo tourner jusqu'au bout. Il s'affiche donc sur
+        TOUT arrêt d'une analyse engagée, qui que soit l'appelant.
+
+        Le drapeau est lu AVANT la remise à zéro : `arreter()` est aussi
+        appelé au chargement d'une vidéo et lors d'un changement de réglage,
+        cas où aucune analyse n'a eu lieu et où il n'y a rien à résumer.
+        """
+        analyse_engagee = self._session_ouverte
         self._timer_traitement.stop()
         self._timer_affichage.stop()
         # Fin d'analyse : la ligne redevient déplaçable, bande comprise.
@@ -846,6 +880,33 @@ class FenetrePrincipale(QMainWindow):
         self._session_ouverte = False
         self.btn_pause.setText("Pause")
         self._maj_boutons()
+        if analyse_engagee:
+            self._afficher_recap()
+
+    def _afficher_recap(self) -> None:
+        """Remplit et DÉVOILE le récapitulatif de fin d'analyse.
+
+        Un `Resultat` impossible à construire ne fait pas tomber la fenêtre :
+        un compteur de terrain ne se ferme pas parce qu'un résumé n'a pas pu
+        s'écrire. Le panneau reste alors masqué, et le journal dit pourquoi.
+        """
+        if self.compteur is None:
+            return
+        try:
+            resultat = self.compteur.resultat(
+                self.config.modele, self.frames, self.frames / self._fps()
+            )
+        except TypeError:
+            # Un compteur de test peut ne pas accepter la durée vidéo : le
+            # récapitulatif est un bonus d'affichage, pas une condition de
+            # fonctionnement de la fenêtre.
+            log.warning("récapitulatif indisponible : signature inattendue")
+            return
+        except Exception as exc:  # noqa: BLE001 — l'affichage ne doit rien casser
+            log.warning("récapitulatif indisponible : %s", exc)
+            return
+        self.recap.afficher(resultat)
+        self.recap.setVisible(True)
 
     def _maj_boutons(self) -> None:
         """Une seule source de vérité pour l'activation des boutons.

@@ -74,6 +74,13 @@ QPushButton#bouton_aide:checked { color: #e5e7eb; }
    la barre de boutons). Même aspect que les autres titres, pour que le
    curseur ne paraisse pas foreign. */
 QLabel#libelle_reglage { color: #9aa3af; }
+/* Récapitulatif de fin d'analyse : titre neutre, valeurs en clair. Le titre
+   reste dans le gris des titres de section — « Analyse terminée » est un
+   constat, pas une annonce, et ne doit pas attirer plus l'œil que le total
+   qu'il introduce. */
+QLabel#recap_titre { font-size: 14px; color: #9aa3af; letter-spacing: 1px; }
+QLabel#recap_libelle { color: #9ca3af; }
+QLabel#recap_valeur { color: #e6e6e6; }
 QProgressBar {
     border: 1px solid #2b2f36; border-radius: 4px; text-align: center; height: 18px;
 }
