@@ -1,0 +1,20 @@
+# Dépendances de développement : packaging, outillage, tests.
+#
+# `requirements.txt` reste la référence d'exécution (torch, ultralytics,
+# opencv, PySide6...). Ce fichier ajoute ce qu'il faut pour CONSTRUIRE et
+# pour tester, sans mélanger les deux lors d'un déploiement.
+#
+# Installation :
+#     python -m pip install -r requirements-dev.txt
+#
+# torch doit rester en version CUDA (`+cu126`) : voir README.md, section
+# « Performance et GPU ». Un torch CPU produirait un exécutable inutilisable
+# sur les scènes longues.
+
+-r requirements.txt
+
+# Construction de l'exécutable Windows.
+pyinstaller>=6.10
+
+# Tests.
+pytest>=8.0

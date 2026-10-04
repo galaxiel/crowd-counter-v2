@@ -1,0 +1,13 @@
+torch>=2.4
+ultralytics>=8.3
+# supervision n'est PLUS une dépendance : le tracking est associatif par IoU
+# (compteur/tracker.py), écrit dans ce dépôt. Vérifié : aucun `import
+# supervision` dans compteur/ ni interface/ — seule une mention en commentaire
+# subsiste, dans le nom historique `_BackendSupervision`.
+opencv-python>=4.10
+numpy>=1.26
+Pillow>=10.4
+PySide6>=6.7
+scipy>=1.13
+pytest>=8.0
+pyinstaller>=6.10
