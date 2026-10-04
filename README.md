@@ -17,6 +17,7 @@ pas d'identification, pas de densimétrie.
 - [Installer et lancer depuis les sources](#installer-et-lancer-depuis-les-sources)
 - [Où placer les modèles](#où-placer-les-modèles)
 - [Performance et GPU](#performance-et-gpu)
+  - [Choisir où faire le calcul](#choisir-où-faire-le-calcul)
 - [Construire l'exécutable](#construire-lexécutable)
 - [Utiliser le logiciel](#utiliser-le-logiciel)
 - [Exporter](#exporter)
@@ -92,11 +93,26 @@ Python 3.11 ou supérieur (testé sur 3.14).
 ```bash
 python -m venv venv
 venv\Scripts\activate
-python -m pip install -r requirements.txt
+python installer.py
 python main.py
 ```
 
-Avec une version **CUDA** de torch — voir [Performance et GPU](#performance-et-gpu).
+`installer.py` détecte la carte graphique et installe la version de torch qui
+va avec. **N'utilisez pas `pip install -r requirements.txt`** pour cette étape :
+torch se publie en deux familles de Wheels, CPU et CUDA, et le paquet nommé
+`torch` sur PyPI ne dit pas laquelle on obtient — c'est l'installation qui a
+l'air correcte et qui tourne à 7 img/s.
+
+Le script se vérifie sans rien installer :
+
+```bash
+python installer.py --dry-run                    # affiche la branche retenue
+python installer.py --dry-run --sans-gpu         # vérifie la branche CPU
+python installer.py --dry-run --peripherique cuda # échoue si pas de carte
+```
+
+`--dry-run` n'installe rien : c'est le moyen de vérifier ce que le script
+comprit de votre machine avant de lui laisser toucher à `pip`.
 
 Pour travailler sur le logiciel lui-même (tests, build) :
 
@@ -144,14 +160,57 @@ torch 2.14.1+cu126
 torchvision 0.29.1+cu126
 ```
 
-Un torch CPU fonctionne, mais sur une vidéo de manifestation l'analyse est
-×4 à ×10 plus lente : le compteur devient inutilisable en direct, et les
-scènes longues demanderont des heures. L'exécutable embarque CUDA — d'où
+C'est ce que fait `installer.py` quand il détecte une carte NVIDIA.
+
+### Combien ça change
+
+Mesuré sur cette machine, sur la vidéo de référence :
+
+| Périphérique | Débit | Vidéo de 4 minutes |
+|---|---|---|
+| CUDA (RTX 4070 SUPER) | ~27 img/s | ~9 min |
+| CPU | ~7 img/s | ~35 min |
+
+Un torch CPU fonctionne, mais le compteur devient inutilisable en direct, et
+les scènes longues demanderont des heures. L'exécutable embarque CUDA — d'où
 ses 3 Go. `torch_cuda.dll` seule pèse 1 Go, `cublasLt` 500 Mo, cuDNN
 plus de 1 Go.
 
-Si `torch.cuda.is_available()` renvoie `False`, l'application le signale
-dans la console et analyse quand même en CPU, très lentement.
+### Choisir où faire le calcul
+
+Le réglage *Calcul sur*, dans le panneau *Périphérique de calcul* :
+
+| Choix | Effet |
+|---|---|
+| **Automatique** (défaut) | CUDA si la machine en a un, CPU sinon |
+| **GPU NVIDIA (CUDA)** | Le GPU est exigé. Sans carte, l'analyse **bascule sur le CPU avec un message** — un plantage sur le terrain coûte plus cher qu'une analyse lente qu'on peut au moins regarder |
+| **CPU uniquement** | Le processeur est exigé même avec un GPU. C'est le remède quand le GPU plante sur une scène particulière |
+
+Ce choix ne change **pas** le décompte : la même scène est analysée dans les
+deux cas.
+
+L'indicateur *Calcul : CUDA — NVIDIA GeForce RTX 4070 SUPER* ou *Calcul :
+CPU uniquement* est affiché **en permanence** dans la barre de statut, sous
+le compteur. Il est mis à jour dès qu'un réglage change, et il dit ce qui est
+réellement utilisé — pas ce qui était demandé.
+
+Sous PyInstaller, `nvidia-smi` n'interroge que le pilote : il ignore
+`CUDA_VISIBLE_DEVICES`, qui est une convention Linux. Pour vérifier la branche
+CPU sur une machine qui a une carte, l'installateur expose `--sans-gpu`.
+
+### AMD n'est pas supporté
+
+Choix assumé : **un seul exécutable, buildé CUDA**. Un wheel torch CPU-only
+pèse ~200 Mo contre ~3 Go pour le CUDA ; livrer les deux ferait doubler la
+taille du dossier `dist/` pour un cas d'usage qui n'est pas le nôtre (une
+carte AMD en 2026 est rare sur le parc de manifestation visé). Le programme
+tourne donc sur AMD en mode CPU, à ~7 img/s — utilisable pour une courte
+vidéo, pas pour une manifestation entière.
+
+### Si le GPU n'est pas utilisé
+
+L'application le signale dans la barre de statut et dans la console, et
+analyse quand même en CPU, très lentement.
 
 Sous PyInstaller, deux pièges ont été traités explicitement (voir
 `crowd-counter.spec` et `hooks/hook-torchvision.py`) :
@@ -294,6 +353,7 @@ Autres limites :
 compteur/    moteur pur, sans dépendance graphique — testable sans écran
 interface/   fenêtre PySide6
 config/      default.json : les valeurs par défaut
+installer.py détection du GPU + installation de torch (CUDA ou CPU)
 tools/       scripts en ligne de commande
 tests/       pytest
 hooks/       hooks PyInstaller (torchvision)
