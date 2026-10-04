@@ -11,6 +11,28 @@ import math
 
 import numpy as np
 
+#: Orientation d'une ligne, telle que l'interface la nomme.
+#:
+#: Elle est déduite de l'axe DOMINANT du segment p1 -> p2, jamais d'un réglage :
+#: l'opérateur trace ce qu'il voit sur l'image, l'interface doit donc nommer ce
+#: qu'il a tracé. Une diagonale est nommée d'après son axe dominant — le libellé
+#: décrit alors le mouvement dominant, et la flèche reste l'affordance non
+#: ambiguë.
+ORIENTATION_VERTICALE = "verticale"
+ORIENTATION_HORIZONTALE = "horizontale"
+
+#: Libellés du sens compté, par orientation. L'ordre est FIXE et fait autorité :
+#: l'entrée 0 est toujours le libellé du sens ``+1``, l'entrée 1 celui du sens
+#: ``-1``. « Gauche -> droite » avant « Droite -> gauche », « Haut -> bas »
+#: avant « Bas -> haut » : dans les deux cas, le libellé d'abord est celui du
+#: mouvement vers les coordonnees CROISSANTES (x vers la droite, y vers le bas
+#: de l'image). Un test verrouille cet ordre : le deranger ferait dire au menu
+#: une chose et au compteur une autre.
+LIBELLES_SENS: dict[str, tuple[str, str]] = {
+    ORIENTATION_VERTICALE: ("Gauche → droite", "Droite → gauche"),
+    ORIENTATION_HORIZONTALE: ("Haut → bas", "Bas → haut"),
+}
+
 
 class Ligne:
     """Ligne orientée définissant une zone de franchissement.
@@ -78,13 +100,81 @@ class Ligne:
 
     # -- Géométrie -------------------------------------------------------
 
-    def vecteur_normal(self) -> tuple[float, float]:
-        """Normale unitaire : sert a situer les deux côtés, pas a dire le sens compté.
+    @property
+    def orientation(self) -> str:
+        """``"verticale"`` ou ``"horizontale"``, d'après l'axe dominant.
 
-        Pour la direction de marche à montrer à l'opérateur, lire
-        ``sens_traversee`` (``-_n``).
+        C'est cette attribute qui permet à l'interface de nommer ce que
+        l'opérateur a réellement tracé : une ligne verticale se compte de
+        gauche à droite ou de droite à gauche, une ligne horizontale de haut
+        en bas ou de bas en haut.
+
+        Le critère est l'axe DOMINANT du segment, et non « dx == 0 » : une
+        ligne légèrement penchée reste ce que l'opérateur a tracé de ses yeux,
+        et un seuil exact la classerait « horizontale » ou « verticale » au
+        choix selon un pixel. En cas d'égalité parfaite (diagonale à 45°), la
+        verticale l'emporte — et comme les deux composantes sont alors non
+        nulles, le libellé reste défini dans les deux cas.
         """
-        return self._n
+        dx = abs(self.p2[0] - self.p1[0])
+        dy = abs(self.p2[1] - self.p1[1])
+        return ORIENTATION_HORIZONTALE if dx > dy else ORIENTATION_VERTICALE
+
+    def _sens_traversee_pour(self, sens: int) -> tuple[float, float]:
+        """Vecteur de marche compté pour un `sens` QUELCONQUE.
+
+        `sens_traversee` ne décrit que le sens de CETTE instance. Pour nommer
+        les deux entrées du réglage, il faut la même quantité pour `+1` et pour
+        `-1` : on la recalcule donc ici, à partir de la même formule que le
+        constructeur, au lieu de reconstruire une `Ligne` par entrée.
+        """
+        signe = 1.0 if sens > 0 else -1.0
+        return (self._d[1] * signe, -self._d[0] * signe)
+
+    def libelle_sens(self, sens: int) -> str:
+        """Nom à l'écran du mouvement compté pour `sens`, en clair.
+
+        « Gauche → droite » / « Droite → gauche » sur une ligne verticale,
+        « Haut → bas » / « Bas → haut » sur une ligne horizontale : le libellé
+        est déduit de la GÉOMÉTRIE de la ligne tracée, pas d'un sens abstrait.
+        C'est indispensable parce que le résultat dépend des deux : sur une
+        ligne verticale tracée de bas en haut, `sens=+1` compte déjà de droite
+        à gauche, alors que sur la même ligne tracée de haut en bas il compte
+        de gauche à droite. Un libellé fixé sur le seul `sens` dirait donc la
+        chose inverse à ce que fait le compteur.
+
+        Le composant utilisé est celui de l'axe DOMINANT, jamais un pixel près
+        de zéro : sur une diagonale, la composante transverse n'est jamais nulle
+        non plus, mais c'est le mouvement dominant qui mérite d'être nommé.
+        """
+        if sens not in (1, -1):
+            raise ValueError("sens doit valoir +1 ou -1")
+        x, y = self._sens_traversee_pour(sens)
+        if self.orientation == ORIENTATION_VERTICALE:
+            return LIBELLES_SENS[ORIENTATION_VERTICALE][0 if x > 0 else 1]
+        return LIBELLES_SENS[ORIENTATION_HORIZONTALE][0 if y > 0 else 1]
+
+    def choix_sens(self) -> list[tuple[str, int]]:
+        """Les deux choix du réglage, dans l'ordre d'affichage : ``(libellé, sens)``.
+
+        L'ordre est celui de `LIBELLES_SENS` — « Gauche → droite » avant
+        « Droite → gauche », « Haut → bas » avant « Bas → haut » — quelle que
+        soit la direction de tracé. L'interface doit garder la même liste
+        quelle que soit la façon dont la ligne a été tracée : c'est ce qui
+        permet à l'opérateur de retrouver le même réglage d'une vidéo à
+        l'autre.
+        """
+        paires = [(self.libelle_sens(s), s) for s in (1, -1)]
+        ordre = LIBELLES_SENS[self.orientation]
+        return sorted(paires, key=lambda paire: ordre.index(paire[0]))
+
+    def vecteur_normal(self) -> tuple[float, float]:
+            """Normale unitaire : sert a situer les deux côtés, pas a dire le sens compté.
+
+            Pour la direction de marche à montrer à l'opérateur, lire
+            ``sens_traversee`` (``-_n``).
+            """
+            return self._n
 
     def coordonnee_projetee(self, p: tuple[float, float]) -> float:
         """Position signée de ``p`` sur la normale, en pixels (0 = sur la ligne)."""

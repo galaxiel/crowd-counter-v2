@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -53,7 +54,11 @@ from compteur.detecteur import Detecteur, charger_modele
 from compteur.ligne import Ligne
 from compteur.tracker import Tracker
 from interface.overlay import dessiner
-from interface.panneau_reglages import PanneauReglages
+from interface.panneau_reglages import (
+    LIBELLES_SENS,
+    PanneauReglages,
+    orientation_par_defaut_sens,
+)
 from interface.style import appliquer_style  # noqa: F401  (ré-export pour main.py)
 from interface.widgets_video import WidgetVideo
 
@@ -171,7 +176,17 @@ class FenetrePrincipale(QMainWindow):
         colonne.addWidget(self.label_statut)
 
         self.panneau = PanneauReglages(self.config)
-        colonne.addWidget(self.panneau, stretch=1)
+        # Le panneau est dans une zone défilante, et c'est devenu nécessaire :
+        # chaque réglage porte désormais son explication lisible, ce qui porte
+        # sa hauteur naturelle à plus de 2000 px pour une fenêtre de 850. Sans
+        # défilement, Qt comprime le panneau et pousse les boutons hors de
+        # l'écran — l'opérateur ne pourrait plus lancer l'analyse. Le
+        # défilement rend chaque explication atteignable sans rien retirer.
+        zone = QScrollArea()
+        zone.setWidget(self.panneau)
+        zone.setWidgetResizable(True)
+        zone.setFrameShape(QScrollArea.Shape.NoFrame)
+        colonne.addWidget(zone, stretch=1)
 
         self.choix_vitesse = QComboBox()
         self.choix_vitesse.addItems(
@@ -189,7 +204,12 @@ class FenetrePrincipale(QMainWindow):
         self.btn_video = QPushButton("Charger la vidéo")
         self.btn_ligne = QPushButton("Tracer la ligne")
         self.btn_ligne.setToolTip(
-            "Clique ensuite deux points sur l'image, en haut et en bas."
+            "Clique ensuite deux points sur l'image, aux deux extrémités de "
+            "la limite que tu veux compter.\n"
+            "Le sens se lit ensuite dans les réglages, avec des libellés "
+            "explicites : « Gauche → droite » ou « Droite → gauche » sur une "
+            "ligne verticale, « Haut → bas » ou « Bas → haut » sur une ligne "
+            "horizontale."
         )
         self.btn_lancer = QPushButton("Lancer")
         self.btn_lancer.setObjectName("primaire")
@@ -408,13 +428,32 @@ class FenetrePrincipale(QMainWindow):
         self.panneau.definir_ligne(self.config.ligne)
         self._rafraichir_affichage()
         self._maj_boutons()
+        # Le sens compté est écrit EN CLAIR dans la barre de statut, et pas
+        # seulement dessiné par la flèche verte. L'opérateur voit ainsi, avant
+        # de lancer, dans quel sens la vidéo va être comptée — c'était
+        # exactement l'information manquante qui lui coûtait de tester les
+        # deux sens à chaque fois.
         self.label_statut.setText(
-            f"Ligne posée de ({self.ligne.p1[0]:.0f}, {self.ligne.p1[1]:.0f}) "
-            f"à ({self.ligne.p2[0]:.0f}, {self.ligne.p2[1]:.0f}). "
-            "Le sens se change dans les réglages ; la flèche verte indique "
-            "le sens compté. Lance quand tu es prêt."
+            f"Ligne {self.ligne.orientation} posée de "
+            f"({self.ligne.p1[0]:.0f}, {self.ligne.p1[1]:.0f}) à "
+            f"({self.ligne.p2[0]:.0f}, {self.ligne.p2[1]:.0f}).\n"
+            f"Sens compté : {self._sens_en_clair()}. "
+            "Si ton cortège va dans l'autre sens, change-le dans les réglages "
+            "avant de lancer."
         )
         return True
+
+    def _sens_en_clair(self) -> str:
+        """Le sens compté, nommé à l'écran, d'après la ligne posée.
+
+        Délègue à `Ligne.libelle_sens` : la barre de statut et la flèche verte
+        ne peuvent donc pas nommer deux choses différentes.
+        """
+        if self.ligne is None:
+            return LIBELLES_SENS[orientation_par_defaut_sens()][
+                0 if self.config.sens == 1 else 1
+            ]
+        return self.ligne.libelle_sens(self.ligne.sens)
 
     def _rafraichir_affichage(self) -> None:
         """Redessine la frame courante avec l'aperçu de la ligne en cours.

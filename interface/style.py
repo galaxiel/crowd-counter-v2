@@ -50,6 +50,12 @@ QSlider::handle:horizontal {
 QLabel#compteur { font-size: 76px; font-weight: 700; color: #4ade80; }
 QLabel#compteur_titre { font-size: 14px; color: #9aa3af; letter-spacing: 2px; }
 QLabel#sous_titre { color: #9ca3af; }
+/* Aide sous un reglage : volontairement en petit et gris. Elle est lue de
+   pres, jamais de loin — le seul chiffre lu de loin reste le compteur. Elle ne
+   doit pas rivaliser avec le champ qu'elle decrit. */
+QLabel#aide_reglage {
+    color: #8b929c; font-size: 11px; padding-bottom: 4px;
+}
 QProgressBar {
     border: 1px solid #2b2f36; border-radius: 4px; text-align: center; height: 18px;
 }

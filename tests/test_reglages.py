@@ -13,7 +13,13 @@ import pytest
 pytest.importorskip("PySide6")
 
 from compteur.config import Config  # noqa: E402
-from interface.panneau_reglages import PanneauReglages, lister_modeles  # noqa: E402
+from compteur.ligne import LIBELLES_SENS  # noqa: E402
+from interface.panneau_reglages import (  # noqa: E402
+    AIDE,
+    PanneauReglages,
+    lister_modeles,
+    orientation_par_defaut_sens,
+)
 
 
 @pytest.fixture
@@ -358,3 +364,228 @@ def test_le_repertoire_courant_est_par_default(application, monkeypatch, tmp_pat
     monkeypatch.chdir(tmp_path)
     assert lister_modeles() == ["nano.pt"]
     assert PanneauReglages(Config(modele="nano.pt")).lire().modele == "nano.pt"
+
+
+# -- Sens : libellés explicites, pilotés par la ligne tracée -------------
+
+
+def _libelles(p):
+    return [p._sens.itemText(i) for i in range(p._sens.count())]
+
+
+def test_sens_affiche_des_libelles_de_direction_pas_avant_apres(application):
+    """« Avant → après » ne disait pas avant quoi : plus rien ne doit l'afficher."""
+    p = PanneauReglages(Config())
+    libelles = " ".join(_libelles(p))
+    assert "Avant" not in libelles
+    assert "Après" not in libelles
+    assert set(_libelles(p)) == set(LIBELLES_SENS[orientation_par_defaut_sens()])
+
+
+def test_sens_verticale_affiche_gauche_droite_et_droite_gauche(application):
+    p = PanneauReglages(Config())
+    p.definir_ligne((640.0, 0.0, 640.0, 720.0))
+    assert _libelles(p) == ["Gauche → droite", "Droite → gauche"]
+
+
+def test_sens_horizontale_affiche_haut_bas_et_bas_haut(application):
+    """Une ligne tracée à l'horizontale change la NATURE des libellés.
+
+    C'est la demande explicite : « Gauche → droite » sur une ligne horizontale
+    n'aurait aucun sens pour l'opérateur, qui voit les gens monter et descendre.
+    """
+    p = PanneauReglages(Config())
+    p.definir_ligne((0.0, 400.0, 1280.0, 400.0))
+    assert _libelles(p) == ["Haut → bas", "Bas → haut"]
+
+
+def test_libelles_recalcules_quand_la_ligne_change(application):
+    """Passer d'une verticale à une horizontale renomme les choix, sur place."""
+    p = PanneauReglages(Config())
+    p.definir_ligne((640.0, 0.0, 640.0, 720.0))
+    assert _libelles(p)[0] == "Gauche → droite"
+    p.definir_ligne((0.0, 400.0, 1280.0, 400.0))
+    assert _libelles(p)[0] == "Haut → bas"
+
+
+def test_changer_de_ligne_ne_change_pas_le_sens_compté(application):
+    """Renommer les choix ne doit pas retourner le comptage.
+
+    Régression centrale : si `lire()` déduisait le `sens` de l'INDICE, le
+    passage vertical -> horizontal pourrait conserver l'indice tout en
+    changeant de sens. Le `sens` est donc attaché au LIBELLÉ, jamais à sa place.
+    """
+    p = PanneauReglages(Config(sens=-1))
+    p.definir_ligne((640.0, 0.0, 640.0, 720.0))
+    assert p.lire().sens == -1
+    p.definir_ligne((0.0, 400.0, 1280.0, 400.0))
+    assert p.lire().sens == -1, "le sens a bougé alors que la ligne changeait"
+
+
+def test_lire_et_afficher_restent_daccord_apres_un_changement_de_ligne(application):
+    """Ce que le menu affiche est ce que `lire()` renvoie, ligne horizontale comprise."""
+    from compteur.ligne import Ligne
+
+    p = PanneauReglages(Config())
+    p.definir_ligne((0.0, 400.0, 1280.0, 400.0))
+    for index, libelle in enumerate(_libelles(p)):
+        p._sens.setCurrentIndex(index)
+        sens = p.lire().sens
+        reel = Ligne((0.0, 400.0), (1280.0, 400.0), sens=sens).libelle_sens(sens)
+        assert reel == libelle, (
+            f"index {index} : le menu propose « {libelle} », le moteur compte « {reel} »"
+        )
+
+
+def test_le_sens_par_defaut_du_panneau_compte_droite_gauche(application):
+    """Non-régression du 315, au niveau de l'interface cette fois.
+
+    `Config.defauts()` porte `sens=+1`. Sur une ligne verticale tracée de bas en
+    haut — l'ordre de tracé de la vidéo de référence — ce `+1` compte de
+    DROITE À GAUCHE. Ouvrir l'application et lancer sans rien toucher doit donc
+    reproduire les 315, pas 1. Ce test échoue bruyamment si un libellé ou un
+    index a été inversé.
+    """
+    from compteur.config import Config as C, chemin_defaut_config
+
+    p = PanneauReglages(C.depuis_fichier(chemin_defaut_config()))
+    p.definir_ligne((640.0, 720.0, 640.0, 0.0))
+    from compteur.ligne import Ligne
+
+    sens = p.lire().sens
+    libelle = Ligne((640.0, 720.0), (640.0, 0.0), sens=sens).libelle_sens(sens)
+    assert libelle == "Droite → gauche"
+    # ... et le libellé affiché par le menu est bien celui-là.
+    assert libelle in _libelles(p)
+
+
+def test_appliquer_une_config_repose_le_bon_libelle(application):
+    """Charger un profil avec `ligne` réétiquette le menu sans perdre le sens."""
+    p = PanneauReglages(Config())
+    p.appliquer(Config(sens=-1, ligne=(0.0, 400.0, 1280.0, 400.0)))
+    assert _libelles(p) == ["Haut → bas", "Bas → haut"]
+    assert p.lire().sens == -1
+    # Le libellé de -1 sur cette horizontale est bien celui affiché, pas l'autre.
+    from compteur.ligne import Ligne
+
+    attendu = Ligne((0.0, 400.0), (1280.0, 400.0), sens=-1).libelle_sens(-1)
+    assert attendu in _libelles(p)
+
+
+def test_ligne_memorisee_invalide_ne_casse_pas_le_panneau(application):
+    """Un profil écrit à la main avec deux points confondus ne doit pas planter.
+
+    Le panneau s'ouvre avant tout tracé : il a besoin d'une hypothèse pour
+    nommer les libellés, pas d'une ligne valide.
+    """
+    p = PanneauReglages(Config())
+    p.appliquer(Config(ligne=(10.0, 10.0, 10.0, 10.0)))
+    assert _libelles(p) == list(LIBELLES_SENS[orientation_par_defaut_sens()])
+    assert p.lire().sens in (1, -1)
+
+
+# -- Explications des réglages -------------------------------------------
+
+REGLES = (
+    "modele",
+    "seuil_confiance",
+    "taille_min_px",
+    "taille_entree",
+    "frames_confirmation",
+    "survie_max",
+    "seuil_matching",
+    "epaisseur_bande",
+    "sens",
+    "frames_hysteresis",
+    "fenetre_lissage",
+)
+
+
+@pytest.mark.parametrize("champ", REGLES)
+def test_chaque_reglage_a_une_explication(application, champ):
+    """Trois questions par réglage : ce que ça fait, ce que ça change, le conseil.
+
+    Un réglage sans explication est un réglage que l'opérateur change au hasard
+    puis conclut que le programme est faux.
+    """
+    p = PanneauReglages(Config())
+    aide = p._widgets[champ].toolTip()
+    assert aide, f"{champ} n'a aucune explication"
+    assert "Ce que ça fait" in aide, f"{champ} : manque la première question"
+    assert "Ce que ça change" in aide, f"{champ} : manque la deuxième question"
+    assert "Valeur conseillée" in aide, f"{champ} : manque la valeur conseillée"
+
+
+@pytest.mark.parametrize("champ", REGLES)
+def test_le_conseil_chiffre_est_soutenu_par_une_mesure(application, champ):
+    """Un conseil numérique doit citer d'où il sort.
+
+    Sans cette exigence, une valeuradvice reste une convention habillée en
+    preuve — exactement ce que l'opérateur ne peut pas vérifier.
+    """
+    aide = AIDE[champ]
+    conseil = [l for l in aide.split("\n") if l.startswith("Valeur conseillée")]
+    assert conseil, f"{champ} : pas de ligne de conseil"
+    ligne = conseil[0]
+    assert any(c.isdigit() for c in ligne), f"{champ} : conseil sans chiffre"
+
+
+def test_chaque_reglage_a_une_aide_visible_sous_le_champ(application):
+    """L'explication doit être lisible SANS survol de la souris.
+
+    L'info-bulle seule est un piège : hors du focus d'un informaticien, une
+    bulle reste invisible. L'encart est donc obligatoire.
+    """
+    p = PanneauReglages(Config())
+    for champ in REGLES:
+        assert p._widgets[champ].toolTip(), f"{champ} : pas d'info-bulle"
+
+
+def test_survie_max_atteignable_a_400_pour_verifier_la_mesure(application):
+    """La plage doit permettre de reproduire la mesure de survie_max.
+
+    On a mesuré 315 à 30 frames et 325 à 400. Un réglage borné à 120
+    empêcherait de vérifier ce que dit l'aide, et une aide invérifiable est
+    une aide fausse.
+    """
+    p = PanneauReglages(Config())
+    assert p._widgets["survie_max"].maximum() >= 400
+    p._widgets["survie_max"].setValue(400)
+    assert p.lire().survie_max == 400
+
+
+def test_taille_entree_propose_1280(application):
+    """1280 est la valeur conseillée : elle doit être sélectionnable."""
+    p = PanneauReglages(Config())
+    choix = [p._widgets["taille_entree"].itemText(i)
+             for i in range(p._widgets["taille_entree"].count())]
+    assert "1280" in choix
+    assert p.lire().taille_entree in (320, 640, 1280)
+
+
+def test_le_panneau_defile_dans_la_fenetre(application):
+    """Les explications ajoutées ne doivent pas pousser les boutons hors de l'écran.
+
+    Le panneau porte désormais une explication lisible sous chaque réglage, ce
+    qui porte sa hauteur naturelle bien au-delà d'une fenêtre de 850 px. Sans
+    zone défilante, Qt comprime le panneau et le bouton « Lancer » devient
+    inatteignable : l'analyse ne serait plus lançable du tout.
+    """
+    from PySide6.QtWidgets import QScrollArea
+
+    from interface.app import FenetrePrincipale
+
+    f = FenetrePrincipale()
+    f.resize(1400, 850)
+    f.show()
+    application.processEvents()
+    zone = f.findChild(QScrollArea)
+    assert zone is not None, "le panneau doit être dans une zone défilante"
+    assert zone.widget() is f.panneau
+    assert f.panneau.sizeHint().height() > zone.height(), (
+        "le panneau devrait réellement déborder : sans défilement, il serait "
+        "comprimé et les boutons hors de l'écran"
+    )
+    # Le bouton de lancement doit rester dans la fenêtre.
+    assert f.btn_lancer.y() + f.btn_lancer.height() <= 850
+    assert f.btn_lancer.isVisible()
