@@ -35,12 +35,14 @@ density estimation.
 2. **Tracking** — IoU association: each head keeps a stable identity from one
    frame to the next.
 3. **Counting** — when an identity moves from one side of the line to the
-   other, in the chosen direction, that's a count.
-4. **Reporting** — one big number on screen, a CSV and a JSON on export.
+   other, in the chosen direction, that's a count. Once counted, the identity
+   is released: it can never be counted again.
+4. **Reporting** — a summary at the end with the total, the rate, and a curve.
 
-The default model (`medium.pt`) is a head detector trained on SCUT-HEAD. On
-the reference video it finds 29 px heads where `yolov8n-head.pt` finds 21 px
-ones — 38 % more real crossings.
+The model only looks inside the detection band (see below), and the default
+model (`medium.pt`) is a head detector trained on SCUT-HEAD. On the reference
+video it finds 29 px heads where `yolov8n-head.pt` finds 21 px ones — 38 %
+more real crossings.
 
 ## Running without installing anything
 
@@ -256,15 +258,36 @@ tool covers.
 1. **Load the video** — *Charger la vidéo* button.
 2. **Draw the line** — *Tracer la ligne* button, then two clicks on the image,
    at the top and bottom of the line you care about. Drawing is "armed": a
-   stray click outside that gesture is ignored.
+   stray click outside that gesture is ignored. The detection band follows the
+   line wherever you put it.
 3. **Set the direction** — in *Ligne de franchissement*, choose the counted
-   direction. The green arrow shows the active direction.
+   direction. The green arrow shows the active direction. **If the count stays
+   at zero after a few seconds, this is almost always why** — the software
+   shows a reminder rather than failing silently.
 4. **Adjust the sensitivity** — the parameter that matters most is *Frames de
    confirmation*: 1 counts immediately (sensitive to false positives), 5 only
-   validates a person seen over several consecutive frames.
+   validates a person seen over several consecutive frames. Every parameter has
+   a tooltip explaining what it does and which value suits this scene; the
+   panel's *Afficher l'aide* button shows them all at once.
 5. **Run** — the counter updates continuously, the line flashes on every
-   crossing.
-6. **Export** — see below.
+   crossing. The band and the line cannot be moved once the run starts.
+6. **Read the summary** — when the analysis stops, a section appears between
+   the status bar and the settings: total, duration, average rate, peak rate
+   and a curve of people per minute.
+
+### The end-of-analysis summary
+
+The summary reports only what was measured:
+
+- **Total** — people counted in the chosen direction.
+- **Average rate** — total over the analysed duration.
+- **Peak rate** — the busiest 60 s window, with when it happened. On analyses
+  shorter than a minute the window shrinks, and the figure is reported as
+  `12 pers / 40 s` rather than extrapolated to a rate that was never measured.
+
+There is **no automatic error rate**. There is no ground truth without manual
+annotation, and the software does not invent one. The only way to know how far
+a total is from the truth is to count a segment by hand and compare.
 
 ### Audit mode
 
@@ -308,6 +331,33 @@ These are not "not yet implemented" — they were considered and ruled out:
   through a given line.
 - **No model training.** Pre-trained local models only.
 
+### The detection band
+
+The model only looks inside a **200 px band centred on the line**. Everything
+outside it is dimmed on screen and never reaches the detector.
+
+This is the core design decision, and it cuts both ways:
+
+- **It improves the count.** People far from the line are mostly noise for a
+  line counter — they crowd together, their boxes merge, and their identities
+  get confused. Confining the tracker to the people actually approaching the
+  line gives it fewer targets to get right, and it gets them right.
+- **It is what makes the video display legible.** The dimmed region tells the
+  operator immediately where the counting happens, instead of boxes appearing
+  and vanishing with no visible reason.
+
+Measured on the reference video, all band widths from 200 px to 600 px produce
+a higher count than analysing the whole frame, and 200 px is the cheapest of
+them. Wider does not help further.
+
+The band moves with the line: click anywhere in it and drag, and the line
+comes along. Both are locked once the analysis starts — a line that moved
+mid-analysis would silently produce a meaningless total.
+
+> **Limitation:** on a diagonal line the band becomes a bounding rectangle
+> that covers most of the frame, so the benefit disappears. It applies to
+> vertical and horizontal lines, which is the intended use.
+
 ### Why a head detector, and why not ByteTrack
 
 The original attempt with a general-purpose "person" detector performed badly
@@ -341,39 +391,36 @@ is the entire reason the engine has no GUI dependency.
 
 ## Known limitations
 
-**Counting returns 0 on some scenes.** This is the most important limitation,
-and it does not show on screen: the software opens normally, the video plays,
-the detection boxes appear, and the number stays at zero. It is not a crash,
-it is a setting — or a geometric limitation of the algorithm.
+**The counted direction must match the direction people walk.** With the
+default settings this is the only reliable way to get a zero: on the reference
+video, counting left-to-right gives 1 person while right-to-left gives 315.
 
-What makes a crossing detectable is measured on the reference video: a head
-there is 20 to 29 px and moves **0.69 px per frame**. The actual displacement
-from one frame to the next is therefore the same order of magnitude as the
-detector's noise — the *median* displacement measured between two consecutive
-frames is 0.00 px. At that scale, two distinct people are as close to each
-other as each of them is to their own position in the previous frame.
+The failure is quiet — the software opens, the video plays, boxes appear, and
+the number stays at zero. The interface shows a reminder after a few seconds
+rather than leaving you to guess, but it cannot know which way your crowd
+walks. Pick the direction that matches.
 
-Three settings make the counter drop to zero, and the symptom is the same for
-all three:
+Two other settings can drop the count to zero, both of which deviate from the
+defaults:
 
-- **Movement too small + confirmation threshold too high.** *Frames de
-  confirmation* is 3 by default: a track only appears in the output after
-  three frames. On a flow where per-frame movement is below the detector's
-  noise, the identity can be lost before reaching that threshold, or the
-  three frames can all pass far from the line. **Remedy: set *Frames de
-  confirmation* to 1**, and/or reduce *Épaisseur de la bande* so the crossing
-  fits into fewer frames. Both increase sensitivity — at the cost of false
-  positives.
+- **Confirmation threshold too high for a slow-moving crowd.** *Frames de
+  confirmation* is 3 by default: a track only appears after three frames. If
+  people move less between frames than the detector's own noise, the identity
+  can be lost before reaching that threshold. **Remedy: set it to 1.** That
+  increases sensitivity, at the cost of false positives.
 - **Smoothing delays the crossing until it cancels it.** *Fenêtre de
-  lissage* is 1 (raw mode) by default, and this is deliberate: the
-  `a_traverse` test then reads the instantaneous position, which is the only
-  position that "moves" at this scale. Beyond K=1, smoothing delays detection
-  of the crossing by half a window, while the anti-rebound lock still reads
-  the side of the **raw** position — already past to the other side. The lock
-  then rejects, and the reference walk goes from **1 count to 0**. **Remedy:
-  leave it at 1.** This default is known and documented in
-  `compteur/config.py`; fixing it means making `_cotes`/`_stabilite` read the
-  smoothed position, not only the crossing test.
+  lissage* is 1 (raw mode) by default, deliberately: the `a_traverse` test then
+  reads the instantaneous position, which is the only position that "moves" at
+  this scale. Beyond K=1, smoothing delays detection of the crossing by half a
+  window while the anti-rebound lock still reads the **raw** position — already
+  past. **Remedy: leave it at 1.** Known and documented in
+  `compteur/config.py`.
+
+  On the reference video, a head is 20 to 29 px and moves **0.69 px per
+  frame** — the same order of magnitude as the detector's noise. This is why
+  the defaults are conservative: the geometry of the problem, not caution for
+  its own sake.
+
 - **Line badly placed.** `a_traverse` interpolates the exact crossing point
   and checks that it falls **along the drawn segment**. A line drawn across
   the street counts the people passing under the middle of the frame; a line
