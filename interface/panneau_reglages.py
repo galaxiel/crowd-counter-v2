@@ -122,192 +122,143 @@ ORIENTATION_SANS_LIGNE = ORIENTATION_VERTICALE
 #: que ça change quand on monte ou on descend, et la valeur conseillée pour
 #: une manifestation filmée en surplomb.
 #:
-#: Les chiffres ne sont pas des avis : ils viennent des mesures faites sur la
-#: vidéo de référence (`D:/Bureau/manif_test.mp4`, 7399 frames, medium.pt). Une
-#: valeur conseillée sans mesure derrière n'est qu'une opinion déguisée en
-#: réglage par défaut, et c'est précisément ce que l'opérateur ne peut pas
-#: vérifier lui-même.
+#: Volontairement COURTES — trois à cinq lignes, une ligne par question. Un
+#: pavé de douze lignes est un pavé que personne ne lit : au survol, l'opérateur
+#: voit un mur et il retient le chiffre, ou rien du tout. Tout ce qui a été
+#: retiré ici (redondances, justifications, développement) vit dans le README et
+#: dans `docs/design/`, où il peut être lu d'un bout à l'autre.
+#:
+#: Les chiffres, eux, restent tous : ils ne sont pas des avis, ils viennent des
+#: mesures faites sur la vidéo de référence (`D:/Bureau/manif_test.mp4`, 7399
+#: frames, medium.pt). Une valeur conseillée sans mesure derrière n'est
+#: qu'une opinion déguisée en réglage par défaut.
+#:
+#: Une seule entrée ne suit pas cette règle, et c'est délibéré :
+#: `vitesse_presentation` n'est pas un champ de `Config`, c'est le curseur que
+#: l'opérateur actionne le plus souvent APRÈS le lancement, et la confusion
+#: qu'il crée (« ralentir l'affichage ralentit le comptage ») coûte une analyse
+#: jetée. Son avertissement doit rester impossible à manquer en survol court.
 AIDE: dict[str, str] = {
     "modele": (
         "Modèle de détection (.pt).\n\n"
-        "Ce que ça fait : cherche des têtes dans l'image. C'est le seul "
-        "réglage qui change ce qui est vu, tous les autres ne font que "
-        "mieux exploiter ce qu'il a vu.\n"
-        "Ce que ça change : un modèle plus lent détecte mieux les petites "
-        "têtes, donc plus de personnes, mais l'analyse ralentit d'autant.\n"
-        "Valeur conseillée : medium.pt. Mesuré sur la vidéo de référence, il "
-        "trouve des têtes de 29 px là où yolov8n-head.pt en trouve de 21, "
-        "soit 38 % de marches réelles en plus."
+        "Ce que ça fait : cherche des têtes dans l'image — seul réglage qui "
+        "change ce qui est vu, les autres mieux exploitent ce qu'il a vu.\n"
+        "Ce que ça change : plus lent = meilleures petites têtes, donc plus "
+        "de personnes, analyse d'autant plus longue.\n"
+        "Valeur conseillée : medium.pt — il trouve des têtes de 29 px là où "
+        "yolov8n-head.pt en trouve de 21, soit 38 % de marches en plus."
     ),
     "seuil_confiance": (
         "Seuil de confiance de la détection.\n\n"
         "Ce que ça fait : une tête n'est retenue que si le modèle est sûr "
         "d'elle à plus de ce seuil.\n"
-        "Ce que ça change : en dessous, tu perds les personnes lointaines et "
-        "floues — donc des pans entiers de foule si la caméra est haute. Au "
-        "dessus, tu ne gardes que les visages nets, donc les premiers rangs.\n"
+        "Ce que ça change : trop bas, tu perds les lointaines et floues ; "
+        "trop haut, il ne reste que les premiers rangs.\n"
         "Valeur conseillée : 0,25. Au-dessus de 0,5, une foule dense vue en "
-        "plongeur ne donne presque plus rien : les têtes y sont petites et le "
-        "modèle est peu sûr."
+        "plongeur ne donne presque plus rien."
     ),
     "taille_min_px": (
         "Taille minimale d'une détection (côté, en pixels).\n\n"
         "Ce que ça fait : ignore toute boîte plus petite que ce côté.\n"
-        "Ce que ça change : augmenter filtre le bruit, mais aussi les vraies "
-        "persones lointaines. Diminuer garde plus de monde, et plus de faux "
-        "positifs — une tache sombre dans la foule.\n"
-        "Valeur conseillée : 3. Mesuré : une tête détectée sur cette vidéo "
-        "fait 20 à 29 px. Un plancher à 20 filtrerait donc la moitié des "
-        "détections."
+        "Ce que ça change : plus haut filtre le bruit et les vraies personnes "
+        "lointaines ; plus bas garde plus de monde et plus de faux positifs.\n"
+        "Valeur conseillée : 3. Mesuré : une tête fait 20 à 29 px sur cette "
+        "vidéo, donc un plancher à 20 filtrerait la moitié des détections."
     ),
     "taille_entree": (
         "Taille à laquelle l'image est réduite avant la détection.\n\n"
-        "Ce que ça fait : le modèle voit l'image à cette taille, en "
-        "redimensionnant la vidéo. Les boîtes sont ramenées à l'échelle de "
-        "l'originale.\n"
-        "Ce que ça change : augmenter trouve plus de petites têtes, donc plus "
-        "de personnes, mais coûte plus de temps de calcul. Diminuer fait "
-        "l'inverse et va plus vite, au prix de personnes perdues.\n"
-        "Valeur conseillée : ne touche pas à ce réglage. Laisse « Résolution "
-        "d'analyse » sur Automatique, et cette valeur s'ajuste toute seule à "
-        "la vidéo chargée. Elle n'est modifiable qu'en mode manuel. Mesuré : "
-        "passer de 640 à 1280 sur une vidéo 720p fait passer le décompte de "
-        "315 à 368 (+17 %) sans surcoût de calcul (272 s contre 260 s sur "
-        "7399 frames), pour 64 détections par frame au lieu de 48."
+        "Ce que ça fait : le modèle voit l'image à cette taille ; les boîtes "
+        "sont ramenées à l'échelle de l'originale.\n"
+        "Ce que ça change : plus haut trouve plus de petites têtes mais coûte "
+        "plus de temps ; plus bas va plus vite au prix de personnes perdues.\n"
+        "Valeur conseillée : ne touche pas à ce réglage, laisse « Résolution "
+        "d'analyse » sur Automatique. Mesuré : 640 → 1280 sur une vidéo 720p "
+        "fait passer le décompte de 315 à 368 (+17 %) sans surcoût de calcul "
+        "(272 s contre 260 s)."
     ),
     "resolution_analyse": (
         "Résolution d'analyse — à quelle taille la vidéo est analysée.\n\n"
         "Ce que ça fait : en mode Automatique, l'image est analysée à la "
-        "résolution RÉELLE de la vidéo que tu viens de charger, jamais plus "
-        "haut que 1280. Le réglage « Taille d'entrée » devient alors "
-        "inactif, et la valeur retenue est affichée à côté.\n"
-        "Ce que ça change : rien au nombre de personnes comptées en soi — "
-        "c'est la même scène, vue plus ou moins finement. Une image trop "
-        "petite fait perdre les têtes lointaines ; une image trop grande "
-        "allonge le calcul sans rien ajouter. Passer de 640 à 1280 sur une "
-        "vidéo 720p, c'est +17 % de personnes comptées pour +5 % de temps.\n"
-        "Valeur conseillée : Automatique, qui est le réglage par défaut. "
-        "Mesuré sur 3000 frames de la vidéo de référence : 640 compte 231 "
-        "personnes en 179 s, 1280 en compte 257 en 230 s (+11 % de personnes "
-        "pour +28 % de temps), et 1920 en compte 271 en 324 s. Le plafond est "
-        "à 1280 parce que 1920 rapporte encore 14 personnes, mais pour 41 % "
-        "de temps de calcul EN PLUS : le dernier cran coûte deux fois plus "
-        "cher que le précédent pour deux fois moins de gain. Choisis "
-        "Manuelle seulement si tu connais le matériel et sais ce que tu "
-        "fais : dans ce cas, monte aussi haut que la source le permet, la "
-        "couche supplémentaire étant à ta charge."
-    ),
-    "peripherique": (
-        "Calcul sur — le processeur qui fait la détection.\n\n"
-        "Ce que ça fait : décide si le modèle YOLO tourne sur le GPU NVIDIA ou "
-        "sur le processeur. Le choix ne change PAS le décompte : la même scène "
-        "est analysée dans les deux cas. Le périphérique réellement utilisé est "
-        "écrit en permanence dans la barre de statut, sous le compteur.\n"
-        "Ce que ça change : uniquement la vitesse. « Automatique » prend le GPU "
-        "s'il y en a un, le CPU sinon. « GPU NVIDIA (CUDA) » EXIGE le GPU : sur "
-        "une machine sans carte NVIDIA, l'analyse bascule quand même sur le CPU "
-        "et te le dit, parce qu'un plantage sur le terrain coûte plus cher "
-        "qu'une analyse lente qu'on peut au moins regarder. « CPU uniquement » "
-        "force le processeur même quand un GPU est présent : c'est le remède "
-        "quand le GPU plante sur une scène particulière.\n"
-        "Valeur conseillée : Automatique, le réglage par défaut. Mesuré sur "
-        "cette machine : environ 27 images/s en CUDA contre 7 img/s en CPU, "
-        "soit une vidéo de 4 minutes analysée en ~9 minutes sur le GPU et "
-        "~35 minutes sur le processeur. Le CPU n'est donc acceptable que pour "
-        "un dépannage ou une toute courte vidéo ; passe en Automatique dès que "
-        "c'est possible."
+        "résolution RÉELLE de la vidéo, jamais plus haut que 1280, et « "
+        "Taille d'entrée » devient inactif.\n"
+        "Ce que ça change : rien au nombre de personnes comptées en soi, c'est "
+        "la même scène vue plus finement ; mesuré, 640 → 1280 donne +17 % de "
+        "personnes pour +5 % de temps.\n"
+        "Valeur conseillée : Automatique. Mesuré sur 3000 frames : 640 compte "
+        "231 personnes en 179 s, 1280 en compte 257 en 230 s, 1920 en compte "
+        "271 en 324 s — le dernier cran coûte deux fois plus cher pour deux "
+        "fois moins de gain."
     ),
     "frames_confirmation": (
         "Frames de confirmation.\n\n"
-        "Ce que ça fait : une personne n'apparaît dans le décompte "
-        "qu'après avoir été vue ce nombre de frames d'affilée. C'est le "
-        "filtre anti-faux positif.\n"
-        "Ce que ça change : augmenter élimine les faux positifs, mais fait "
-        "perdre les personnes qui traversent très vite, et ralentit le "
-        "décompte. Diminuer compte plus tôt et plus fort, avec plus de bruit.\n"
-        "Valeur conseillée : 3. Mesuré : les têtes se déplacent de 0,69 px "
-        "par frame, une personne reste donc des dizaines de frames dans le "
-        "champ ; 3 = 0,1 s à 30 i/s. Au-dessus de 3, on commence à perdre des "
-        "passages sans rien gagner en fiabilité — le bruit est déjà filtré."
+        "Ce que ça fait : une personne n'entre dans le décompte qu'après "
+        "avoir été vue ce nombre de frames d'affilée. Filtre anti-faux "
+        "positif.\n"
+        "Ce que ça change : plus haut élimine le bruit mais perd les passages "
+        "très rapides ; plus bas compte plus tôt, avec plus de bruit.\n"
+        "Valeur conseillée : 3 — 0,1 s à 30 i/s, les têtes bougeant de 0,69 px "
+        "par frame. Au-delà, on perd des passages sans rien gagner."
     ),
     "survie_max": (
         "Survie max sans détection (frames).\n\n"
-        "Ce que ça fait : une personne que le détecteur perd de vue reste "
-        "quand même suivie ce nombre de frames, à sa dernière position.\n"
-        "Ce que ça change : augmenter préserve les personnes derrière un "
-        "groupe ou un drapeau, mais elles gardent leur dernière position — donc "
-        "un groupe arrêté sur la ligne gonfle le nombre de présents et peut "
-        "faire compter un faux passage. Diminuer casse les tracks et compte la "
-        "même personne plusieurs fois.\n"
-        "Valeur conseillée : 30. Mesuré sur la vidéo de référence, le total "
-        "passe de 315 à 314 (60 frames), 317 (150) et 325 (400) : +3 % au "
-        "maximum, alors que les présents simultanés passent de 219 à 916 et "
-        "les tracks vus chutent de 9873 à 4315. La mémoire prédictive ne "
-        "rachète presque rien ici et rend le compteur de présents faux : "
-        "reste à 30. Si tu subis de longues occultations — drapeaux, portiques "
-        "— monte à 150, le surcoût y est de 2 personnes."
+        "Ce que ça fait : une personne perdue de vue reste suivie ce nombre de "
+        "frames, figée à sa dernière position.\n"
+        "Ce que ça change : trop élevé, les tracks mortes gonflent le "
+        "compteur de présents (219 → 916 mesuré) sans gagner de comptage ; trop "
+        "bas, les tracks cassent et la même personne est comptée plusieurs "
+        "fois.\n"
+        "Valeur conseillée : 30 — le total ne bouge que de +3 % (315 → 325 à "
+        "400 frames). Monter à 150 n'ajoute que 2 personnes."
     ),
-
     "seuil_matching": (
         "Seuil de matching (IoU).\n\n"
         "Ce que ça fait : deux détections ne sont la même personne que si "
         "leurs boîtes se recouvrent d'au moins ce taux.\n"
-        "Ce que ça change : augmenter sépare mieux deux personnes voisines, "
-        "mais perd le suivi dès qu'une personne bouge entre deux frames. "
-        "Diminuer garde le suivi mais fusionne deux personnes qui se "
+        "Ce que ça change : plus haut sépare deux voisins mais perd le suivi "
+        "quand quelqu'un bouge ; plus bas fusionne les personnes qui se "
         "croisent.\n"
-        "Valeur conseillée : 0,3. Mesuré : ici les têtes se déplacent de "
-        "0,69 px par frame, soit un recouvrement de 0,95 avec elles-mêmes. Une "
-        "tête de 29 px qui en bouge de 15 px par frame ne recouvre plus qu'à "
-        "0,32 : au-dessus de 0,35, le tracker la perdrait."
+        "Valeur conseillée : 0,3. Mesuré : les têtes se recouvrent à 0,95 "
+        "avec elles-mêmes, mais seulement à 0,32 après 15 px de déplacement — "
+        "au-delà de 0,35 le tracker perd la personne."
     ),
     "epaisseur_bande": (
         "Épaisseur de la bande (px).\n\n"
         "Ce que ça fait : la zone que quelqu'un doit traverser pour être "
         "compté. La flèche verte la dessine au milieu.\n"
-        "Ce que ça change : élargir aide quand les positions oscillent, mais "
-        "compte aussi les gens qui s'arrêtent sur la ligne. Rétrécir devient "
-        "exigeant sur une foule compacte.\n"
-        "Valeur conseillée : 30. Assez large pour absorber le bruit de "
-        "position du détecteur, assez étroit pour qu'un groupe arrêté sur la "
-        "ligne ne soit pas compté comme un passage."
+        "Ce que ça change : plus large absorbe le bruit de position mais "
+        "compte les gens arrêtés sur la ligne ; plus étroit devient exigeant "
+        "sur une foule compacte.\n"
+        "Valeur conseillée : 30, assez large pour le bruit du détecteur et "
+        "assez étroit pour qu'un groupe arrêté ne compte pas comme un passage."
     ),
     "sens": (
         "Sens de traversée — le mouvement que tu veux compter.\n\n"
-        "Ce que ça fait : ne compte que les personnes qui vont dans ce sens. "
-        "Le libellé suit l'orientation de la ligne que tu as tracée : "
-        "« Gauche → droite » / « Droite → gauche » sur une ligne verticale, "
-        "« Haut → bas » / « Bas → haut » sur une ligne horizontale. La flèche "
-        "verte dessinée sur l'image montre le même sens.\n"
-        "Ce que ça change : rien au décompte si le cortège va dans l'autre "
-        "sens — tu obtiens zéro ou presque. Si tu obtiens le chiffre à 0 ou à "
-        "1, c'est presque toujours celui-ci : inverse et relance.\n"
-        "Valeur conseillée : choisis le sens dans lequel marche ton cortège. "
-        "Sur la vidéo de référence, le cortège va de droite à gauche : 315 "
-        "personnes dans ce sens, 1 dans l'autre."
+        "Ce que ça fait : ne compte que les personnes allant dans ce sens. Le "
+        "libellé suit la ligne tracée, la flèche verte montre le même sens.\n"
+        "Ce que ça change : rien si le cortège va dans l'autre sens — tu "
+        "obtiens 0 ou 1, inverse et relance dans ce cas.\n"
+        "Valeur conseillée : le sens réel du cortège. Mesuré sur la vidéo de "
+        "référence : 315 personnes de droite à gauche, 1 dans l'autre sens."
     ),
     "frames_hysteresis": (
         "Frames d'hystérésis.\n\n"
-        "Ce que ça fait : il faut avoir été du côté de départ pendant ce "
-        "nombre de frames avant qu'un franchissement compte.\n"
-        "Ce que ça change : augmenter filtre les gens qui frôlent la ligne, "
-        "mais fait perdre ceux qui passent vite. Diminuer compte plus vite, "
-        "avec plus de risque de double comptage.\n"
-        "Valeur conseillée : 2. Assez pour écarter un tremblement de "
+        "Ce que ça fait : il faut avoir été du côté de départ ce nombre de "
+        "frames avant qu'un franchissement compte.\n"
+        "Ce que ça change : plus haut écarte ceux qui frôlent la ligne mais "
+        "perd les passages rapides ; plus bas compte plus vite, avec plus de "
+        "risque de double comptage.\n"
+        "Valeur conseillée : 2, assez pour écarter un tremblement de "
         "position, assez court pour ne pas retarder le décompte."
     ),
     "fenetre_lissage": (
         "Fenêtre de lissage (frames).\n\n"
-        "Ce que ça fait : la position servant au test de franchissement est "
-        "la moyenne des K dernières positions connues, ce qui filtre le bruit "
-        "du détecteur.\n"
-        "Ce que ça change : augmenter lisse davantage, mais retarde le "
-        "franchissement d'une demi-fenetre — et le verrou anti-rebond lit "
-        "encore la position brute, donc le comptage est REJETÉ.\n"
-        "Valeur conseillée : 1, c'est-à-dire aucun lissage. Mesuré : la "
-        "marche de référence passe de 1 comptage (K=1) à 0 comptage pour "
-        "K=5, 10 et 20. K>1 est aujourd'hui nuisible, il n'est exposé que "
-        "parce que le champ existe dans la configuration."
+        "Ce que ça fait : la position testée est la moyenne des K dernières "
+        "positions connues, ce qui filtre le bruit du détecteur.\n"
+        "Ce que ça change : augmenter lisse mais retarde le franchissement "
+        "d'une demi-fenetre, et le verrou anti-rebond lit encore la position "
+        "brute : le comptage est REJETÉ.\n"
+        "Valeur conseillée : 1, aucun lissage. Mesuré : la marche de référence "
+        "passe de 1 comptage (K=1) à 0 pour K=5, 10 et 20."
     ),
     # Le seul réglage d'AIDE qui ne soit pas un champ de `Config` : la vitesse
     # de présentation ne voyage pas dans un profil, elle est remise à zéro à
@@ -316,25 +267,18 @@ AIDE: dict[str, str] = {
     # un réglage aussi fréquent sans explication est un réglage qu'on change
     # au hasard — en croyant ralentir le comptage.
     "vitesse_presentation": (
-        "Vitesse de présentation — à quel rythme l'analyse est affichée.\n\n"
-        "Ce que ça fait : ralentit ou accélère l'affichage de la vidéo "
-        "pendant que le comptage, lui, continue à la vitesse maximale de la "
-        "machine. Les images intermédiaires sont simplement sautées, comme "
-        "dans un lecteur vidéo en lecture lente : rien n'est mis en file "
-        "d'attente, rien n'est recalculé.\n"
-        "Ce que ça change : UNIQUEMENT la fluidité de ce que tu vois. NE "
-        "CHANGE PAS le décompte. Le nombre de personnes comptées est "
-        "exactement le même à 0,25× qu'à 4× : l'analyse a déjà été faite "
-        "dans les trois cas. Ralentir sert à regarder le détail d'un passage ; "
-        "accélérer sert à rattraper la fin d'une vidéo longue.\n"
-        "Valeur conseillée : « max », qui affiche chaque image traitée dès "
-        "qu'elle est prête. En dessous, l'affichage saute des images "
-        "intermédiaires : le chiffre affiché reste juste, mais tu ne vois "
-        "plus chaque personne passer la ligne. Choisis 0,25× si tu veux "
-        "regarder de près comment quelqu'un franchit la ligne, 1× pour le "
-        "confort de lecture, 4× ou « max » pour aller au bout d'une longue vidéo."
+            "Vitesse de présentation — à quel rythme l'analyse est affichée.\n\n"
+            "Ce que ça fait : ralentit ou accélère l'affichage pendant que le "
+            "comptage, lui, continue à la vitesse maximale de la machine. Les "
+            "images intermédiaires sont sautées, rien n'est recalculé.\n"
+            "Ce que ça change : UNIQUEMENT la fluidité de ce que tu vois. NE "
+            "CHANGE PAS le décompte : il est exactement le même à 0,25× qu'à 4×. "
+            "Ralentir sert à regarder un passage de près.\n"
+            "Valeur conseillée : « max », qui affiche chaque image dès qu'elle "
+            "est prête. 0,25× pour regarder de près, 1× pour le confort de "
+            "lecture, 4× ou « max » pour aller au bout d'une longue vidéo."
     ),
-        }
+}
 
 
 def orientation_par_defaut_sens() -> str:
@@ -665,6 +609,14 @@ class PanneauReglages(QWidget):
         nature que celle des seuils. L'opérateur doit pouvoir le retrouver —
         et le comprendre même après un plantage du GPU — sans le confondre avec
         un seuil qu'il aurait mal réglé.
+
+        Pas d'encart d'aide ici, et c'est voulu : l'opérateur n'a pas à apprendre
+        ce que veut dire « CUDA » au survol. Les trois choix se lisent sur leurs
+        libellés, et le périphérique RÉELLEMENT utilisé est écrit en permanence
+        dans la barre de statut, sous le compteur — c'est là que l'information
+        se trouve, pas dans une bulle qu'on ne voit pas. Le réglage est donc
+        construit à la main, sans `_poser` : `_poser` exige une entrée dans
+        `AIDE`, et il n'y en a plus.
         """
         g = QGroupBox("Périphérique de calcul")
         v = QVBoxLayout(g)
@@ -680,9 +632,10 @@ class PanneauReglages(QWidget):
             )
         )
         self._peripherique.currentIndexChanged.connect(self._emettre)
-        self._poser(
-            v, "peripherique", "Calcul sur", self._peripherique
-        )
+        etiquette = QLabel("Calcul sur")
+        v.addWidget(etiquette)
+        v.addWidget(self._peripherique)
+        self._widgets["peripherique"] = self._peripherique
         return g
 
     def _groupe_profils(self) -> QGroupBox:

@@ -99,39 +99,29 @@ def test_un_profil_enregistre_conserve_le_peripherique(application, tmp_path):
     assert Config.depuis_fichier(chemin).peripherique == PERIPHERIQUE_CPU
 
 
-# -- L'explication -------------------------------------------------------
+# -- L'absence d'explication ---------------------------------------------
 
 
-def test_le_reglage_a_son_explication(application):
-    aide = AIDE["peripherique"]
-    assert "Ce que ça fait" in aide
-    assert "Ce que ça change" in aide
-    assert "Valeur conseillée" in aide
+def test_le_reglage_na_plus_dexplication(application):
+    """Retiré à la demande de l'opérateur : un pavé sur le GPU n'aide personne.
+
+    L'information utile — le périphérique réellement utilisé — est écrite en
+    permanence dans la barre de statut, sous le compteur. Une bulle de douze
+    lignes qu'on ne voit qu'au survol ne peut que la concurrencer.
+    """
+    assert "peripherique" not in AIDE
 
 
-def test_l_explication_dit_que_ca_ne_change_pas_le_decompte(application):
-    """Le risque réel : croire qu'un réglage de vitesse change le résultat."""
-    aide = AIDE["peripherique"].lower()
-    assert "ne change pas le décompte" in aide
+def test_le_panneau_construit_le_reglage_sans_encart_daide(application):
+    """Le réglage doit SURVIVRE à la suppression de son explication.
 
-
-def test_l_explication_chiffre_les_deux_vitesses(application):
-    """Les seuls chiffres fiables sont 27 img/s en CUDA et 7 img/s en CPU."""
-    aide = AIDE["peripherique"]
-    assert "27" in aide
-    assert "7 img/s" in aide
-    conseil = [l for l in aide.split("\n") if l.startswith("Valeur conseillée")]
-    assert conseil and any(c.isdigit() for c in conseil[0])
-
-
-def test_l_explication_dit_que_cuda_bascule_sans_carte(application):
-    """Le comportement inhabituel doit être écrit, pas seulement implémenté."""
-    assert "bascule" in AIDE["peripherique"].lower()
-
-
-def test_le_tooltip_du_widget_reprend_l_explication(application):
+    On n'a retiré que le texte : le choix CPU/GPU reste dans le panneau, avec
+    son étiquette, parce que c'est le remède quand un GPU plante sur le terrain.
+    """
     p = PanneauReglages(Config())
-    assert p._widgets["peripherique"].toolTip() == AIDE["peripherique"]
+    w = p._widgets["peripherique"]
+    assert w.count() == 3
+    assert not w.toolTip()
 
 
 # -- L'indicateur de la barre de statut ----------------------------------

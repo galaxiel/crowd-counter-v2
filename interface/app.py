@@ -240,11 +240,15 @@ class FenetrePrincipale(QMainWindow):
 
         self.panneau = PanneauReglages(self.config)
         # Le panneau est dans une zone défilante, et c'est devenu nécessaire :
-        # chaque réglage porte désormais son explication lisible, ce qui porte
-        # sa hauteur naturelle à plus de 2000 px pour une fenêtre de 850. Sans
-        # défilement, Qt comprime le panneau et pousse les boutons hors de
-        # l'écran — l'opérateur ne pourrait plus lancer l'analyse. Le
-        # défilement rend chaque explication atteignable sans rien retirer.
+        # chaque réglage porte son explication lisible sous le champ, ce qui
+        # porte sa hauteur naturelle à 2330 px mesurés pour une fenêtre de 850.
+        # Les explications ont été raccourcies (tâche 17 : 2976 → 2330 px, cinq
+        # lignes au lieu de douze), ce qui a bien الأحمر la page de défilement
+        # d'un tiers — mais pas assez pour supprimer la zone. Sans défilement,
+        # Qt comprime le panneau et pousse les boutons hors de l'écran — le
+        # bouton « Lancer » deviendrait inatteignable, et l'analyse ne serait
+        # plus lançable du tout. La zone rend chaque explication atteignable
+        # sans rien retirer.
         zone = QScrollArea()
         zone.setWidget(self.panneau)
         zone.setWidgetResizable(True)
@@ -283,7 +287,7 @@ class FenetrePrincipale(QMainWindow):
         # l'opérateur actionne APRÈS avoir lancé — et c'est celui qu'il
         # actionne le plus souvent : au ralenti pour vérifier un passage
         # douteux, en accéléré pour rattraper la fin. En bas d'une colonne de
-        # 2000 px de réglages, il passait inapercu.
+        # 2300 px de réglages, il passait inapercu.
         #
         # Il porte un LIBELLÉ parce qu'un menu déroulant nu ne dit pas ce qu'il
         # règle. Et son explication dit explicitement qu'il ne touche PAS au

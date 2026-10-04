@@ -498,8 +498,10 @@ REGLES = (
     "sens",
     "frames_hysteresis",
     "fenetre_lissage",
-    "peripherique",
 )
+# `peripherique` n'en fait plus partie : l'opérateur a demandé le retrait de
+# l'explication GPU/CPU, et l'indicateur permanent de la barre de statut
+# affiche déjà le périphérique réellement utilisé (cf. tests/test_peripherique_ui.py).
 
 
 @pytest.mark.parametrize("champ", REGLES)
@@ -540,6 +542,38 @@ def test_chaque_reglage_a_une_aide_visible_sous_le_champ(application):
     p = PanneauReglages(Config())
     for champ in REGLES:
         assert p._widgets[champ].toolTip(), f"{champ} : pas d'info-bulle"
+
+def test_chaque_explication_tient_en_cinq_lignes(application):
+    """L'invariant de la tâche 17 : une explication se LIT au survol.
+
+    Douze lignes affichées dans une bulle de 300 px de large donnent un pavé
+    que l'opérateur survole sans le lire. Le format court — titre, ce que ça
+    fait, ce que ça change, la valeur conseillée — est une contrainte de
+    conception, pas une préférence de style : c'est elle qui permet au panneau
+    de tenir dans la fenêtre.
+    """
+    trop_longues = {
+        champ: len(texte.splitlines())
+        for champ, texte in AIDE.items()
+        if len(texte.splitlines()) > 5
+    }
+    assert not trop_longues, f"explications trop longues : {trop_longues}"
+
+
+def test_chaque_explication_garde_ses_chiffres(application):
+    """Raccourcir ne doit pas tout perdre : le chiffre mesuré, c'est l'essentiel.
+
+    Une valeur conseillée sans la mesure qui la fonde redevient une opinion
+    habillée en réglage par défaut, et l'opérateur ne peut pas la vérifier.
+    """
+    for champ, texte in AIDE.items():
+        conseil = [
+            ligne
+            for ligne in texte.split("\n")
+            if ligne.startswith("Valeur conseillée")
+        ]
+        assert conseil, f"{champ} : pas de ligne de conseil"
+        assert any(c.isdigit() for c in conseil[0]), f"{champ} : conseil sans chiffre"
 
 
 def test_survie_max_atteignable_a_400_pour_verifier_la_mesure(application):
