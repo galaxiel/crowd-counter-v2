@@ -356,9 +356,26 @@ class PanneauReglages(QWidget):
         self._bloquer = True
         self._widgets: dict[str, QWidget] = {}
         self._sens_actuel: int | None = None
+        # Les encarts sont posés dans le layout mais masqués par défaut, et
+        # c'est LE bouton « Aide » qui décide de leur visibilité. Voir
+        # `_poser` et `_maj_aide`.
+        self._encarts: list[QLabel] = []
+        self._aide_visible = False
 
         racine = QVBoxLayout(self)
         racine.setContentsMargins(8, 8, 8, 8)
+        self._btn_aide = QPushButton("Afficher l'aide des réglages")
+        self._btn_aide.setCheckable(True)
+        self._btn_aide.setObjectName("bouton_aide")
+        self._btn_aide.setToolTip(
+            "Affiche sous chaque réglage ce qu'il fait, ce que ça change et la "
+            "valeur conseillée. Les mêmes textes sont déjà dans les "
+            "info-bulles : ce bouton les déplie pour être lus d'un coup d'œil, "
+            "sans les cacher par défaut pour que le panneau tienne dans la "
+            "fenêtre."
+        )
+        self._btn_aide.toggled.connect(self._maj_aide)
+        racine.addWidget(self._btn_aide)
         racine.addWidget(self._groupe_detection(config))
         racine.addWidget(self._groupe_tracker(config))
         racine.addWidget(self._groupe_ligne(config))
@@ -381,52 +398,79 @@ class PanneauReglages(QWidget):
         """
         return AIDE[champ]
 
-    def _poser(
-        self,
-        layout,
-        champ: str,
-        titre: str,
-        widget: QWidget,
-        *,
-        aide_visible: bool = True,
-    ) -> QWidget:
-        """Pose un réglage : titre, widget, aide, et enregistre le widget.
+    def _poser(self, layout, champ: str, titre: str, widget: QWidget) -> QWidget:
+        """Pose un réglage : titre, widget, encart d'aide, et enregistre le widget.
 
         L'aide va à trois endroits, volontairement : l'info-bulle du widget
         (au survol, sur la cible naturelle), l'info-bulle du titre (le survol
-        tombe souvent sur le texte, pas sur le champ), et un petit encart
-        lisible sous le champ. L'opérateur qui ne découvre pas les info-bulles
-        voit quand même, sans rien cliquer, ce que fait le réglage et ce qu'on
-        lui conseille.
+        tombe souvent sur le texte, pas sur le champ), et un encart lisible sous
+        le champ — **masqué par défaut**, que le bouton « Aide » déplie.
 
-        L'encart est replié sur sa valeur conseillée quand le texte complet
-        serait trop long : c'est le nombre qui décide, pas l'explication.
+        Pourquoi masqué : l'encart est fait pour être lu, pas lu en passant. Douze
+        d'entre eux à la fois, c'est douze pavés entre l'opérateur et la ligne
+        qu'il cherche — c'est exactement le symptôme « un pavé sous chaque
+        paramètre ». Masqués, ils ne coûtent plus de hauteur et le panneau tient
+        d'un coup d'œil ; le texte, lui, reste disponible au survol comme avant,
+        donc rien n'est perdu, seulement la place.
+
+        Un titre vide pose une étiquette MUETTE (`""`) : c'est le cas du seuil de
+        confiance, dont le titre porte la valeur et est posé à part.
         """
         aide = self._aide(champ)
-        etiquette = QLabel(titre)
-        etiquette.setToolTip(aide)
-        layout.addWidget(etiquette)
+        if titre:
+            etiquette = QLabel(titre)
+            etiquette.setToolTip(aide)
+            layout.addWidget(etiquette)
         widget.setToolTip(aide)
         layout.addWidget(widget)
-        if aide_visible:
-            layout.addWidget(self._encart(aide))
+        layout.addWidget(self._encart(aide))
         self._widgets[champ] = widget
         return widget
 
     def _encart(self, aide: str) -> QLabel:
-        """Petit texte d'aide lisible sous un réglage : l'essentiel en deux lignes."""
+        """Encart d'aide d'un réglage, replié sur l'essentiel, masqué par défaut.
+
+        Replié sur sa valeur conseillée quand le texte complet serait trop long :
+        c'est le nombre qui décide, pas l'explication. L'encart est construit
+        TOUJOURS (donc toujours présent et testable) mais invisible tant que le
+        bouton « Aide » n'a pas été actionné.
+        """
         conseil = ""
         for ligne in aide.split("\n"):
             if ligne.startswith("Valeur conseillée"):
                 conseil = ligne
                 break
-        resume = "\n".join(ligne for ligne in aide.split("\n") if ligne.startswith("Ce que"))
+        resume = "\n".join(
+            ligne for ligne in aide.split("\n") if ligne.startswith("Ce que")
+        )
         texte = f"{resume}\n{conseil}".strip()
         etiquette = QLabel(texte)
         etiquette.setObjectName("aide_reglage")
         etiquette.setWordWrap(True)
         etiquette.setToolTip(aide)
+        etiquette.setVisible(self._aide_visible)
+        self._encarts.append(etiquette)
         return etiquette
+
+    def _maj_aide(self, visible: bool) -> None:
+        """Affiche ou masque TOUS les encarts d'un coup.
+
+        Un seul interrupteur pour toute la documentation : l'opérateur ne
+        choisit pas réglage par réglage, il demande « je lis la doc » ou « je
+        règle ». Le libellé du bouton dit dans quel état on se trouve, donc il
+        n'y a jamais à deviner si l'aide est ouverte.
+        """
+        self._aide_visible = bool(visible)
+        for encart in self._encarts:
+            encart.setVisible(self._aide_visible)
+        self._btn_aide.setText(
+            "Masquer l'aide des réglages" if self._aide_visible
+            else "Afficher l'aide des réglages"
+        )
+
+    def aide_visible(self) -> bool:
+        """`Vrai` si les encarts d'aide sont dépliés (lecture et tests)."""
+        return self._aide_visible
 
 
     def _groupe_detection(self, c: Config) -> QGroupBox:
@@ -451,15 +495,11 @@ class PanneauReglages(QWidget):
         self._seuil.setDecimals(3)
         self._seuil.setValue(c.seuil_confiance)
         self._seuil.valueChanged.connect(self._emettre)
-        self._poser(
-            v, "seuil_confiance", "", self._seuil, aide_visible=False
-        )
-        # Le titre reste dans le layout, l'aide non : cet encart serait le
-        # troisième sous un réglage qui en a déjà deux.
+        # Titre vide : le titre du seuil porte la valeur, il est posé à part
+        # juste après. L'encart, lui, est posé par `_poser` comme les autres.
+        self._poser(v, "seuil_confiance", "", self._seuil)
         v.insertWidget(v.indexOf(self._seuil), self._etiquette_seuil)
         self._etiquette_seuil.setToolTip(self._aide("seuil_confiance"))
-        self._seuil.setToolTip(self._aide("seuil_confiance"))
-        v.insertWidget(v.indexOf(self._seuil) + 1, self._encart(self._aide("seuil_confiance")))
 
         self._taille_min = QSpinBox()
         self._taille_min.setRange(0, 300)
@@ -561,12 +601,8 @@ class PanneauReglages(QWidget):
         # essayer les deux sens pour trouver le bon. `remplir_libelles_sens`
         # les refait dès que la ligne change.
         self._sens.currentIndexChanged.connect(self._emettre)
-        self._poser(v, "sens", "Sens de traversée", self._sens, aide_visible=False)
+        self._poser(v, "sens", "Sens de traversée", self._sens)
         self._remplir_libelles_sens(c.sens, self._config.ligne)
-        self._sens.setToolTip(self._aide("sens"))
-        v.insertWidget(
-            v.indexOf(self._sens) + 1, self._encart(self._aide("sens"))
-        )
 
         self._hysteresis = QSpinBox()
         self._hysteresis.setRange(0, 10)

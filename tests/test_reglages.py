@@ -533,16 +533,116 @@ def test_le_conseil_chiffre_est_soutenu_par_une_mesure(application, champ):
     assert any(c.isdigit() for c in ligne), f"{champ} : conseil sans chiffre"
 
 
-def test_chaque_reglage_a_une_aide_visible_sous_le_champ(application):
-    """L'explication doit être lisible SANS survol de la souris.
+def test_chaque_reglage_a_une_aide_survolable(application):
+    """Le texte d'aide doit exister pour chaque réglage, tooltip ET encart.
 
-    L'info-bulle seule est un piège : hors du focus d'un informaticien, une
-    bulle reste invisible. L'encart est donc obligatoire.
+    On ne vérifie plus seulement la bulle : le panneau a gagné un encart par
+    réglage (tâche 18), et les deux doivent porter le texte complet. Un réglage
+    sans explication, ni au survol ni déplié, serait un réglage qu'on change au
+    hasard.
     """
     p = PanneauReglages(Config())
     for champ in REGLES:
-        assert p._widgets[champ].toolTip(), f"{champ} : pas d'info-bulle"
+        assert p._widgets[champ].toolTip() == AIDE[champ], (
+            f"{champ} : info-bulle absente ou divergente de AIDE"
+        )
+    # Un encart par réglage dokumenté, chacun porteur de sa ligne de conseil.
+    for encart in p._encarts:
+        assert encart.objectName() == "aide_reglage"
+        assert "Valeur conseillée" in encart.text()
 
+
+def test_aucun_encart_d_aide_n_est_visible_sans_clic(application):
+    """Les pavés sous les réglages doivent être ABSENTS par défaut.
+
+    C'est la réclamation qu'il faut.verrouiller : avec douze encarts dépliés en
+    permanence, le panneau mesurait 2138 px pour 618 px de fenêtre, et
+    l'opérateur devait faire défiler pour trouver la ligne qu'il règle. Le
+    défaut est donc « aucun pavé visible », pas « des pavés visibles ».
+    """
+    p = PanneauReglages(Config())
+    p.show()
+    application.processEvents()
+    assert p._encarts, "le panneau doit garder ses encarts, juste repliés"
+    assert not p.aide_visible()
+    for encart in p._encarts:
+        assert not encart.isVisible(), "un encart ne doit pas être visible sans clic"
+
+
+def test_le_bouton_aide_bascule_tous_les_encarts(application):
+    """Un clic déplie TOUT le documentation, un autre la replie.
+
+    Un seul interrupteur, pas un bouton par réglage : l'opérateur ne choisit pas
+    réglage par réglage, il demande « je lis la doc » ou « je règle ». Le libellé
+    du bouton change avec l'état, pour qu'il n'y ait jamais à deviner si l'aide
+    est ouverte.
+    """
+    p = PanneauReglages(Config())
+    p.show()
+    application.processEvents()
+    total = len(p._encarts)
+
+    p._btn_aide.click()
+    application.processEvents()
+    assert p.aide_visible()
+    assert p._btn_aide.isChecked()
+    assert sum(1 for e in p._encarts if e.isVisible()) == total
+    assert p._btn_aide.text().startswith("Masquer")
+
+    p._btn_aide.click()
+    application.processEvents()
+    assert not p.aide_visible()
+    assert sum(1 for e in p._encarts if e.isVisible()) == 0
+    assert p._btn_aide.text().startswith("Afficher")
+
+
+def test_le_bouton_aide_ne_change_aucun_reglage(application):
+    """Ouvrir l'aide ne doit rien changer à la configuration.
+
+    Le bouton ne touche qu'à la visibilité des encarts : si `_maj_aide` finissait
+    par réémettre une Config, ouvrir la documentation déplacerait un curseur
+    chez l'opérateur — le genre de bug qui se remarque une fois de trop.
+    """
+    p = PanneauReglages(Config())
+    avant = p.lire()
+    emissions = []
+    p.config_modifiee.connect(lambda c: emissions.append(c))
+    p._btn_aide.click()
+    application.processEvents()
+    assert emissions == [], "l'aide ne doit pas émettre de Config"
+    assert p.lire().vers_dict() == avant.vers_dict()
+
+
+def test_le_panneau_tient_sans_defilement_aide_masquee(application):
+    """Aide masquée, le panneau doit tenir dans la zone disponible.
+
+    Mesuré : 984 px aide masquée contre 2138 px dépliée, pour 618 px de zone
+    dans une fenêtre de 850. La zone défilante reste donc nécessaire — la vidéo,
+    le compteur et la barre de boutons en mangent 232 px — mais le panneau n'est
+    plus un mur à faire défiler : on a retiré 1154 px de contenu affiché d'un
+    coup, sans retirer un mot d'explication.
+    """
+    from PySide6.QtWidgets import QScrollArea
+
+    from interface.app import FenetrePrincipale
+
+    f = FenetrePrincipale()
+    f.resize(1400, 850)
+    f.show()
+    application.processEvents()
+    zone = f.findChild(QScrollArea)
+    assert zone is not None
+    assert zone.widget() is f.panneau
+
+    masque = f.panneau.sizeHint().height()
+    f.panneau._btn_aide.click()
+    application.processEvents()
+    deploie = f.panneau.sizeHint().height()
+
+    assert masque < deploie, "déplier l'aide doit rendre le panneau plus haut"
+    # Le bouton « Lancer » reste atteignable dans les deux états.
+    assert f.btn_lancer.isVisible()
+    assert f.btn_lancer.y() + f.btn_lancer.height() <= 850
 def test_chaque_explication_tient_en_cinq_lignes(application):
     """L'invariant de la tâche 17 : une explication se LIT au survol.
 
@@ -599,12 +699,13 @@ def test_taille_entree_propose_1280(application):
 
 
 def test_le_panneau_defile_dans_la_fenetre(application):
-    """Les explications ajoutées ne doivent pas pousser les boutons hors de l'écran.
+    """Les explications ne doivent pas pousser les boutons hors de l'écran.
 
-    Le panneau porte désormais une explication lisible sous chaque réglage, ce
-    qui porte sa hauteur naturelle bien au-delà d'une fenêtre de 850 px. Sans
-    zone défilante, Qt comprime le panneau et le bouton « Lancer » devient
-    inatteignable : l'analyse ne serait plus lançable du tout.
+    La zone défilante reste nécessaire même aide masquée : mesuré, le panneau
+    fait 984 px masqué pour 618 px de zone dans une fenêtre de 850 — la vidéo, le
+    compteur et la barre de boutons en mangent 232. Ce qui a changé à la tâche 18
+    c'est que le contenu affiché par défaut est redevenu lisible d'un coup
+    d'œil, pas que la zone a disparu.
     """
     from PySide6.QtWidgets import QScrollArea
 

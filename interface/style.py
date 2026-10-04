@@ -58,10 +58,18 @@ QLabel#avertissement {
 }
 /* Aide sous un reglage : volontairement en petit et gris. Elle est lue de
    pres, jamais de loin — le seul chiffre lu de loin reste le compteur. Elle ne
-   doit pas rivaliser avec le champ qu'elle decrit. */
+   doit pas rivaliser avec le champ qu'elle decrit. Elle n'est visible que
+   lorsque le bouton « Aide » est actionne (tache 18). */
 QLabel#aide_reglage {
     color: #8b929c; font-size: 11px; padding-bottom: 4px;
 }
+/* Le bouton « Aide » : gris et discret, parce que replier la documentation est
+   l'action de fond d'écran, pas le bouton principal de l'écran — « Lancer »
+   garde cette place. */
+QPushButton#bouton_aide {
+    color: #9ca3af; text-align: left; padding: 4px 6px;
+}
+QPushButton#bouton_aide:checked { color: #e5e7eb; }
 /* Titre d'un réglage situé HORS du panneau (la vitesse de présentation, sous
    la barre de boutons). Même aspect que les autres titres, pour que le
    curseur ne paraisse pas foreign. */

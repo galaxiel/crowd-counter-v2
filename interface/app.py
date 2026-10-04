@@ -239,16 +239,18 @@ class FenetrePrincipale(QMainWindow):
         colonne.addWidget(self.label_statut)
 
         self.panneau = PanneauReglages(self.config)
-        # Le panneau est dans une zone défilante, et c'est devenu nécessaire :
-        # chaque réglage porte son explication lisible sous le champ, ce qui
-        # porte sa hauteur naturelle à 2330 px mesurés pour une fenêtre de 850.
-        # Les explications ont été raccourcies (tâche 17 : 2976 → 2330 px, cinq
-        # lignes au lieu de douze), ce qui a bien الأحمر la page de défilement
-        # d'un tiers — mais pas assez pour supprimer la zone. Sans défilement,
-        # Qt comprime le panneau et pousse les boutons hors de l'écran — le
-        # bouton « Lancer » deviendrait inatteignable, et l'analyse ne serait
-        # plus lançable du tout. La zone rend chaque explication atteignable
-        # sans rien retirer.
+        # Le panneau est dans une zone défilante, et la zone reste nécessaire
+        # même aide repliée. Mesuré : panneau à 984 px aide masquée, 2138 px
+        # aide dépliée, pour 618 px disponibles dans une fenêtre de 850 — la
+        # vidéo, le compteur et la barre de boutons mangent déjà 232 px. Sans
+        # zone, Qt comprimerait le panneau et le bouton « Lancer » deviendrait
+        # inatteignable : l'analyse ne serait plus lançable du tout.
+        #
+        # Ce que la tâche 18 a changé n'est donc pas la zone mais son contenu :
+        # les encarts d'aide sont repliés derrière le bouton « Aide » du panneau.
+        # On a gagné 1154 px de défilement sans retirer un mot d'explication —
+        # elles sont toutes là, à deux endroits : au survol du champ, et d'un clic
+        # dans le panneau quand on veut les lire.
         zone = QScrollArea()
         zone.setWidget(self.panneau)
         zone.setWidgetResizable(True)
