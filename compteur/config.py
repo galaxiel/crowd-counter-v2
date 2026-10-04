@@ -53,6 +53,28 @@ MODE_AUTO = "auto"
 MODE_MANUEL = "manuel"
 MODES_RESOLUTION: tuple[str, ...] = (MODE_AUTO, MODE_MANUEL)
 
+#: Modes de choix du périphérique de calcul, dans l'ordre d'affichage.
+#:
+#: - `auto` : CUDA si la machine en a un, CPU sinon. C'est le défaut, et le
+#:   seul mode qui convienne sans connaître le matériel de la machine cible ;
+#: - `cuda` : le GPU est EXIGÉ. Sur une machine sans NVIDIA, l'analyse bascule
+#:   quand même sur le CPU, avec un message — voir
+#:   `detecteur.peripherique_effectif` : un message vaut mieux qu'un crash sur
+#:   le terrain, et l'opérateur voit immédiatement pourquoi c'est lent ;
+#: - `cpu` : le CPU est EXIGÉ, même quand un GPU est présent. C'est le
+#:   remède quand le GPU plante sur une scène particulière.
+#:
+#: Comme pour la résolution, ce sont des IDENTIFIANTS sans accent : ils
+## voyagent dans les profils JSON. Les libellés sont dans l'interface.
+PERIPHERIQUE_AUTO = "auto"
+PERIPHERIQUE_CUDA = "cuda"
+PERIPHERIQUE_CPU = "cpu"
+PERIPHERIQUES: tuple[str, ...] = (
+    PERIPHERIQUE_AUTO,
+    PERIPHERIQUE_CUDA,
+    PERIPHERIQUE_CPU,
+)
+
 #: Plafond de la résolution d'analyse automatique, en pixels.
 #:
 #: Le coût marginal devient clairement défavorable au-delà. Mesuré sur 3000
@@ -162,6 +184,22 @@ def mode_resolution(connu: str | None) -> str:
     return MODE_AUTO
 
 
+def mode_peripherique(connu: str | None) -> str:
+    """Normalise un mode de périphérique de calcul.
+
+    Même contrat que `mode_resolution` : toute valeur inconnue — `None`,
+    chaîne vide, mode d'une version future — retombe sur `PERIPHERIQUE_AUTO`,
+    parce que c'est le seul mode qui marche partout. Le repli est journalisé.
+    """
+    if connu in PERIPHERIQUES:
+        return connu
+    if connu is not None:
+        log.warning(
+            "mode de périphérique inconnu (%r) : repli sur %r.", connu, PERIPHERIQUE_AUTO
+        )
+    return PERIPHERIQUE_AUTO
+
+
 @dataclass
 class Config:
     # Détection
@@ -187,6 +225,18 @@ class Config:
     # l'écrit avec `avec_resolution()` avant de lancer. Le moteur ne connaît
     # donc qu'un seul chiffre, et `Detecteur` n'a pas à savoir d'où il sort.
     resolution_analyse: str = MODE_AUTO
+    # Sur quel périphérique tourne la détection.
+    #
+    # - `PERIPHERIQUE_AUTO` : CUDA si la machine en a un, CPU sinon.
+    # - `PERIPHERIQUE_CUDA` : le GPU est exigé ; sans NVIDIA, l'analyse bascule
+    #   sur le CPU AVEC un message — un crash sur le terrain coûte plus cher
+    #   qu'une analyse lente qu'on peut au moins regarder.
+    # - `PERIPHERIQUE_CPU` : le CPU est exigé même si un GPU est présent.
+    #   Remède quand le GPU plante sur une scène particulière.
+    #
+    # Ce réglage ne change PAS le décompte : il ne change que la vitesse (et,
+    # à la précision machine près, rien d'autre).
+    peripherique: str = PERIPHERIQUE_AUTO
     # Tracker
     frames_confirmation: int = 3
     survie_max: int = 30
@@ -240,6 +290,8 @@ class Config:
             # Un profil écrit à la main peut porter n'importe quoi ; on
             # normalise plutôt que de refuser le fichier entier.
             d["resolution_analyse"] = mode_resolution(d["resolution_analyse"])
+        if "peripherique" in d:
+            d["peripherique"] = mode_peripherique(d["peripherique"])
         return cls(**d)
 
     def avec_resolution(self, largeur: int, hauteur: int) -> "Config":
