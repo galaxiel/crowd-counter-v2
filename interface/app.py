@@ -248,6 +248,21 @@ class FenetrePrincipale(QMainWindow):
         self._maj_peripherique()
         colonne.addWidget(self.label_peripherique)
 
+        # L'etat de TORCH lui-meme (version, GPU reellement utilise, ou
+        # « absent ») est un label distinct de `label_peripherique`, et pour
+        # une raison differente : `label_peripherique` dit ce que le REGLAGE
+        # produit, y compris quand torch manque (« CPU uniquement » parce
+        # qu'aucun GPU n'est visible). `label_torch` dit si le moteur de
+        # calcul est INSTALLE. Les deux se contredisent dans le cas
+        # interessant — une machine avec GPU et sans torch — et c'est
+        # justement ce cas qu'il faut voir sans ambiguite.
+        self.label_torch = QLabel()
+        self.label_torch.setObjectName("sous_titre")
+        self.label_torch.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_torch.setWordWrap(True)
+        self._etat_torch = None
+        colonne.addWidget(self.label_torch)
+
         # L'avertissement « 0 compté » vit dans son PROPRE label, comme le
         # périphérique de calcul et pour la même raison : `label_statut` est
         # réécrit à chaque changement d'état (vidéo chargée, pause, erreur,
@@ -380,6 +395,12 @@ class FenetrePrincipale(QMainWindow):
         self._timer_traitement.timeout.connect(self._tick)
         self._timer_affichage.timeout.connect(self._afficher)
 
+        # Etat de torch initial, AVANT tout affichage. `preparer()` (v2)
+        # rappelle `definir_etat_torch` juste apres la construction ; depuis
+        # les sources, ou dans un test, c'est cette ligne qui donne un
+        # indicateur honnete au lieu d'un label vide.
+        self.definir_etat_torch(None)
+
     def _maj_peripherique(self, config: Config | None = None) -> None:
         """Recalcule et affiche « Calcul : CUDA — … » ou « Calcul : CPU … ».
 
@@ -400,6 +421,45 @@ class FenetrePrincipale(QMainWindow):
             log.warning("%s", choix.avertissement)
         self.label_peripherique.setText(f"Calcul : {choix.libelle}")
         self._peripherique_effectif = choix
+
+    def definir_etat_torch(self, etat) -> None:
+        """Enregistre l'etat de torch et met l'indicateur a jour.
+
+        Appele par `main.py` avec le retour de `interface.demarrage.preparer`.
+        Un argument absent ou faux reste acceptable : la fenetre doit pouvoir
+        etre construite seule, comme le font les 481 tests existants, et dans
+        ce cas l'indicateur retombe sur une detection directe de torch.
+
+        `label_torch` est un label DEDIE, pas une ligne de plus dans
+        `label_statut`. La meme raison que pour `label_peripherique` :
+        `label_statut` est reecrit a chaque changement d'etat (video chargee,
+        analyse, pause, erreur) et effacerait precisement l'information que
+        l'operateur cherche au moment ou il la cherche. Un label jamais
+        reecrit tient jusqu'a la fin de session.
+        """
+        from interface.demarrage import EtatTorch, texte_indicateur
+
+        if etat is None:
+            # Fenetre construite seule (tests, ou appel sans `preparer`) :
+            # on deduit l'etat de ce qui est reellement importable.
+            version = ""
+            try:
+                import torch
+
+                version = str(getattr(torch, "__version__", ""))
+            except ImportError:
+                pass
+            from interface.demarrage import _cuda_reelle
+
+            etat = EtatTorch(version=version, cuda=_cuda_reelle(), gpu="")
+        self._etat_torch = etat
+        self.label_torch.setText(texte_indicateur(etat))
+        if etat.probleme:
+            log.warning("%s", etat.probleme)
+
+    def etat_torch(self):
+        """Etat de torch affiche, pour les tests et le recapitulatif."""
+        return getattr(self, "_etat_torch", None)
 
     def device_effectif(self) -> str:
         """Périphérique réellement utilisé, au format attendu par torch.
