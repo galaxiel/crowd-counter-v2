@@ -270,6 +270,12 @@ def uv_exe(dossier: pathlib.Path | None = None) -> pathlib.Path | None:
     # autorité même si un `uv` est installé sur le poste : c'est la seule
     # garantie que l'application se comporte pareil partout. Le `PATH` est un
     # secours affiché, jamais le premier choix.
+    #
+    # ⚠ `getattr(sys, "_MEIPASS", None)` et non `sys._MEIPASS` : cette
+    # variable n'existe QUE dans le binaire gelé. Depuis les sources elle
+    # manque, et un accès direct lèverait `AttributeError` — le genre
+    # d'erreur qui n'apparaît que chez l'utilisateur, jamais en test.
+    meipass = getattr(sys, "_MEIPASS", None)
     for candidat in (
         # 1. `sys._MEIPASS` : où PyInstaller pose les données embarquées.
         pathlib.Path(meipass) / "uv.exe" if meipass else None,

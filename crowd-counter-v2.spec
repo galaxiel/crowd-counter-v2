@@ -40,7 +40,19 @@ Le budget de 50 Mo supposait que le reste du logiciel tiendrait dans 50 Mo une
 fois torch retiré ; il en fait 254. Deux surprises l'ont fait grimper :
 `uv.exe` fait **49 Mo** là où l'estimation initiale en annonçait 15, et
 `numpy`/`PIL`/`scipy` (41 Mo) ne pouvaient être exclus qu'APRÈS avoir vérifié
-que `uv` les réinstalle bien dans le venv.
+que `uv` les réinstalle bien dans le venv — **vérification qui s'est révélée
+fausse pour le chemin critique, voir ci-dessous**.
+
+**⚠ `numpy` est ré-introduit (05/10/2026) après un binaire qui ne démarrait
+pas.** L'exclusion de `b24d8cc` était correcte pour l'inférence et fausse
+pour le démarrage : `main.py` importait `interface.app` → `cv2` → `numpy`
+AVANT que `preparer()` ait pu poser le venv sur `sys.path`. Sur le binaire
+gelé : fenêtre ouverte, fermée aussitôt,
+`ModuleNotFoundError: No module named 'numpy'`. Réintroduire `numpy` coûte
+**57 Mo** (36 Mo de paquet + 21 Mo de `numpy.libs`) et rend le crash
+structurellement impossible, quel que soit l'état du venv. `PIL` et `scipy`
+restent exclus : rien ne les touche sur le chemin critique. Deux tests
+verrouillent la règle : `tests/test_demarrage_sans_venv.py`.
 
 **Un point important, à ne pas confondre** : `cv2` et `PySide6` ne sont PAS
 des doublons. Le venv construit au premier lancement contient `numpy`, `PIL`,
@@ -214,19 +226,26 @@ a = Analysis(
         "PySide6.QtCharts",
         "PySide6.QtDataVisualization",
         # -- Les paquets que le VENV installe ET que le venv est censé
-        #    fournir au premier lancement : les embarquer en plus serait un
-        #    doublon. Vérifié dans le venv réellement construit :
-        #    `numpy`, `numpy.libs` et `PIL` y sont, installés comme dépendances
-        #    de torch.
+        #    fournir au premier lancement.
         #
-        #    ⚠ On ne peut PAS en faire autant pour `cv2` et `PySide6` : le
-        #    venv ne contient ni l'un ni l'autre. Les embarquer est donc
-        #    nécessaire, pas redondant — cf. le tableau de poids en tête de
-        #    fichier. Les exclure ici casserait le démarrage, puisque
-        #    `main.py` importe PySide6 AVANT même que le venv soit
-        #    interrogeable.
-        "numpy",
-        "numpy.libs",
+        #    ⚠ `numpy` et `numpy.libs` ont été RÉ-INTRODUITS le 05/10/2026.
+        #    Les exclure (commit `b24d8cc`) était le raisonnement « le venv
+        #    les réinstallera » — vrai pour l'INFERENCE, faux pour le
+        #    DÉMARRAGE. `interface/app.py` fait `import cv2` au chargement du
+        #    module, `cv2` fait `import numpy` au sien, et `main.py` atteignait
+        #    ce chemin avant que le venv existe. Résultat sur le binaire
+        #    gelé : fenêtre ouverte puis fermée aussitôt, traceback
+        #    `ModuleNotFoundError: No module named 'numpy'`.
+        #
+        #    On les réintroduit pour une raison simple : le coût d'un doublon
+        #    se mesure en Mo, celui d'un binaire qui ne démarre pas se mesure
+        #    en utilisateurs. `numpy` pèse 36 Mo + 21 Mo de `numpy.libs` dans
+        #    le paquet, contre 322 Mo avant : +18 %, pour un exécutable qui
+        #    s'ouvre. La régression structurelle est verrouillée par
+        #    `tests/test_demarrage_sans_venv.py::test_le_spec_embarque_numpy`.
+        #
+        #    `PIL`/`pillow`/`scipy` restent exclus : rien ne les importe sur le
+        #    chemin critique, et ils sont réinstallés par torch dans le venv.
         "PIL",
         "pillow",
         "scipy",

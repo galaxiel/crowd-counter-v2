@@ -506,3 +506,50 @@ def test_les_tailles_annoncees_sont_realistes():
     cpu = tl.taille_attendue(False)
     assert 2 * 1024**3 < cuda < 3 * 1024**3, "torch CUDA fait ~2,4 Go"
     assert 100 * 1024**2 < cpu < 200 * 1024**2, "torch CPU fait ~120 Mo"
+
+# ---------------------------------------------------------------------------
+# `uv_exe` POUR DE VRAI
+# ---------------------------------------------------------------------------
+#
+# Tous les tests ci-dessus court-circuitent `uv_exe` par `monkeypatch`. C'est
+# justifié pour tester la CLASSIFICATION d'un échec, mais ça laissait le
+# corps de la fonction lui-même sans aucun test. Résultat :
+
+
+def test_uv_exe_trouve_le_binaire_dans_meipass(tmp_path, monkeypatch):
+    """`_MEIPASS` d'abord, et SANS planter si la variable n'existe pas.
+
+    Bug trouvé le 05/10/2026 sur le binaire gelé, jamais dans les sources :
+    `uv_exe` référençait `meipass` sans jamais l'affecter, donc
+    `NameError: name 'meipass' is not defined` au premier lancement. Le
+    `_Worker` l'attrape et l'application démarre sans moteur — l'utilisateur
+    voit « moteur de calcul absent » au lieu de « téléchargement en cours »,
+    ce qui est un diagnostic F AUX : le réseau marche très bien, c'est le
+    logiciel qui ne l'appelle pas.
+
+    Le test pose `sys._MEIPASS` comme le fait le bootloader PyInstaller.
+    """
+    meipass = tmp_path / "_internal"
+    meipass.mkdir()
+    uv = meipass / "uv.exe"
+    uv.write_bytes(b"MZ")
+
+    monkeypatch.setattr(sys, "_MEIPASS", str(meipass), raising=False)
+    monkeypatch.delenv("PATH", raising=False)
+
+    trouve = tl.uv_exe()
+    assert trouve == uv, f"uv.exe n'a pas été trouvé dans _MEIPASS : {trouve}"
+
+
+def test_uv_exe_ne_depend_pas_du_path(tmp_path, monkeypatch):
+    """Sans `_MEIPASS` et sans `PATH`, la fonction ne doit pas lever.
+
+    Le cas « depuis les sources » : pas de `_MEIPASS`, et un poste où `uv`
+    n'est pas installé. La fonction doit renvoyer `None` — l'appelant gère —
+    et non une `NameError` que personne n'a prévue.
+    """
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "vide"))
+
+    # Ni dépôt ni dossier de build ne contiennent de uv.exe ici.
+    assert tl.uv_exe() is None

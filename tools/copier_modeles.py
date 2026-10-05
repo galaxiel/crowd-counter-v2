@@ -32,11 +32,19 @@ import sys
 
 RACINE = pathlib.Path(__file__).resolve().parent.parent
 
-#: Dossier de sortie par défaut. Le `.spec` produit un dossier
-#: (`dist/CompteurManifestation/`) et non un `.exe` isolé — voir le README,
+#: Dossiers de sortie par défaut. Le `.spec` produit un dossier
+#: (`dist/CompteurManifestationV2/`) et non un `.exe` isolé — voir le README,
 #: section « Lancer sans rien installer ». On tolère les deux : si un build
 #: onefile a été produit, les poids vont à côté du `.exe`.
+#:
+#: ⚠ La V2 passe EN PREMIER, et c'est délibéré. Les deux dossiers coexistent
+#: (la v1 fait 4,3 Go et ne doit pas être écrasée), et la liste ci-dessous
+#: choisit le PREMIER qui existe. Tant que la v2 était absente, un
+#: `copier_modeles.py` sans `--dest` depositait donc les poids dans la v1 —
+#: overwrite silencieux du dossier qu'on soi-dit ne pas toucher. Les poids
+#: étaient identiques, donc aucun dégât, mais l'accident restait possible.
 dossiers_cibles = (
+    RACINE / "dist" / "CompteurManifestationV2",
     RACINE / "dist" / "CompteurManifestation",
     RACINE / "dist",
 )

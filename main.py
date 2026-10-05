@@ -52,7 +52,25 @@ def main() -> int:
 
     app = QApplication(sys.argv)
 
-    from interface.app import FenetrePrincipale
+    # ⚠ `interface.app` N'EST PAS IMPORTÉ ICI, et c'est délibéré.
+    #
+    # `interface/app.py` fait `import cv2` au chargement du module, et `cv2`
+    # fait `import numpy` au sien. Or `numpy` n'est pas dans NOTRE paquet :
+    # c'est le venv qui l'installe. Importer `interface.app` avant `preparer`
+    # revenait donc à exiger le venv avant d'avoir eu l'occasion de le
+    # construire — un paquet incapable de démarrer pour pouvoir démarrer.
+    # C'est exactement le traceback du binaire gelé (`main.py` ligne 55).
+    #
+    # L'ordre ci-dessous est donc STRICT, et il n'est pas décoratif :
+    #   1. `ajouter_au_sys_path`  — pose le venv s'il existe déjà ;
+    #   2. QApplication + style   — PySide6 seul, toujours disponible ;
+    #   3. `preparer`              — l'écran d'installation, toujours
+    #                                atteignable, et qui installe le venv ;
+    #   4. `interface.app`         — seulement maintenant, quand le venv est
+    #                                interrogeable.
+    #
+    # L'import reste dans cette fonction, et non au niveau du module, pour
+    # que PyInstaller continue de voir le chemin d'import à analyser.
     from interface.demarrage import preparer
     from interface.style import appliquer_style
 
@@ -62,6 +80,9 @@ def main() -> int:
     # `preparer` ne lève jamais : au pire il renvoie un état « absent », et
     # l'application démarre sans moteur de calcul.
     etat_torch = preparer(None)
+
+    # Le venv est maintenant interrogeable : le moteur peut être importé.
+    from interface.app import FenetrePrincipale
 
     fenetre = FenetrePrincipale()
     fenetre.definir_etat_torch(etat_torch)
