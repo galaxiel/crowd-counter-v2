@@ -48,11 +48,12 @@ pas.** L'exclusion de `b24d8cc` était correcte pour l'inférence et fausse
 pour le démarrage : `main.py` importait `interface.app` → `cv2` → `numpy`
 AVANT que `preparer()` ait pu poser le venv sur `sys.path`. Sur le binaire
 gelé : fenêtre ouverte, fermée aussitôt,
-`ModuleNotFoundError: No module named 'numpy'`. Réintroduire `numpy` coûte
-**57 Mo** (36 Mo de paquet + 21 Mo de `numpy.libs`) et rend le crash
-structurellement impossible, quel que soit l'état du venv. `PIL` et `scipy`
-restent exclus : rien ne les touche sur le chemin critique. Deux tests
-verrouillent la règle : `tests/test_demarrage_sans_venv.py`.
+`ModuleNotFoundError: No module named 'numpy'`. Coût mesuré : `_internal`
+passe de **254,5 à 280,7 Mo**, soit **+26,2 Mo** (`numpy` 5,9 +
+`numpy.libs` 20,0 + `dist-info` 0,2) ; le paquet complet fait **397,4 Mo**,
+dont 105,4 Mo de poids `.pt`. `PIL` et `scipy` restent exclus : rien ne les
+touche sur le chemin critique. Douze tests verrouillent la règle :
+`tests/test_demarrage_sans_venv.py`.
 
 **Un point important, à ne pas confondre** : `cv2` et `PySide6` ne sont PAS
 des doublons. Le venv construit au premier lancement contient `numpy`, `PIL`,
@@ -239,9 +240,10 @@ a = Analysis(
         #
         #    On les réintroduit pour une raison simple : le coût d'un doublon
         #    se mesure en Mo, celui d'un binaire qui ne démarre pas se mesure
-        #    en utilisateurs. `numpy` pèse 36 Mo + 21 Mo de `numpy.libs` dans
-        #    le paquet, contre 322 Mo avant : +18 %, pour un exécutable qui
-        #    s'ouvre. La régression structurelle est verrouillée par
+        #    en utilisateurs. MESURÉ sur le paquet reconstruit : `_internal`
+        #    passe de 254,5 à 280,7 Mo, soit **+26,2 Mo** pour `numpy`
+        #    (5,9 Mo) + `numpy.libs` (20,0 Mo) + le `dist-info` (0,2 Mo).
+        #    La régression structurelle est verrouillée par
         #    `tests/test_demarrage_sans_venv.py::test_le_spec_embarque_numpy`.
         #
         #    `PIL`/`pillow`/`scipy` restent exclus : rien ne les importe sur le
