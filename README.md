@@ -222,35 +222,65 @@ Under PyInstaller, two traps were handled explicitly (see
 
 ## Building the executable
 
+**Build from a clean virtual environment.** This is not advice — it is the
+difference between a 4.3 GB executable and a 9.7 GB one.
+
+Ultralytics imports its optional inference backends conditionally. If they are
+installed, PyInstaller bundles them: TensorRT (1.5 GB), TensorFlow (1.1 GB),
+ONNX Runtime (741 MB), xformers (413 MB) and bitsandbytes (213 MB). **None of
+them is used** — this project only ever runs PyTorch. That is 5.5 GB of dead
+weight in the output folder.
+
+Excluding them from `crowd-counter.spec` does not work: PyInstaller crashes
+while reading one of their hooks. The reliable approach is to make them
+unavailable in the first place — a virtual environment that never had them.
+
+### Procedure
+
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m PyInstaller --clean crowd-counter.spec
-python tools/copier_modeles.py
+# 1. clean environment, nothing else in it
+python -m venv build-env
+
+# 2. torch CUDA + matching torchvision — see the warning below
+build-env\Scripts\python -m pip install torch==2.14.1+cu126 torchvision==0.29.1+cu126 ^
+    --index-url https://download.pytorch.org/whl/cu126
+
+# 3. the rest
+build-env\Scripts\python -m pip install ultralytics opencv-python PySide6 pyinstaller pytest
+
+# 4. build
+build-env\Scripts\python -m PyInstaller --clean crowd-counter.spec
+build-env\Scripts\python tools/copier_modeles.py
 ```
 
-Result: `dist/CompteurManifestation/` — the executable, its `_internal/`
-folder and the weights next to it.
+**torch and torchvision must come from the same index.** A CPU-only
+torchvision next to a CUDA torch crashes `torchvision::nms` on CUDA. This is
+the single most common packaging mistake here.
 
-The build takes **6 to 10 minutes**: PyInstaller analyses torch, which alone
-contains a few thousand modules, then copies 4 GB of DLLs to disk. `upx=True`
-would make compression interminable on signed NVIDIA DLLs; the `.spec`
-disables it.
+Result: `dist/CompteurManifestation/` — the executable, its `_internal/` folder
+and the weights next to it. **4.3 GB**, launching in ~1.3 s.
 
-`--clean` empties the cache between two builds. Without it, the second build is
-noticeably faster but may reuse an outdated dependency graph — after a torch
-version change, use `--clean`.
-
-### Verify that it launches
+### Verify it before shipping it
 
 ```bash
-python tools/verifier_lancement_exe.py
+build-env\Scripts\python tools/verifier_lancement_exe.py
 ```
 
 Launches the executable the way a user would, checks that a window titled
-*Compteur de manifestation* appears, that `medium.pt` is next to it, and that
+*Compteur de manifestation* appears, that the weights are next to it, and that
 the console output does not contain the silent `Config` fallback. A build that
 succeeds does not prove that a double-click works — that is exactly what this
 tool covers.
+
+> If the folder is locked during a rebuild (`Device or resource busy`), the
+> executable from the previous build is still running. Close it first.
+
+### Why it cannot go below ~4 GB
+
+3.8 GB of the 4.3 GB are torch's CUDA DLLs — `torch_cuda.dll` alone is 1 GB,
+cuBLAS 500 MB, cuDNN over 1 GB. As long as CUDA ships inside the executable,
+that is the floor. Going lower means not shipping torch at all and downloading
+it on first launch; see `HISTOIRE.md`.
 
 ## Using the software
 
