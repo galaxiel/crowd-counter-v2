@@ -546,6 +546,12 @@ python -m pytest tests/ -v
   rather than as documentation; read it only if you want to know *why* a
   decision was taken, including the ones that were later reversed.
 
+## Support
+
+This project is free and open source. If it saves you time, a coffee is
+welcome — the button in the app (or [this
+link](https://buymeacoffee.com/galaxiel)) opens the page directly.
+
 ## Licence
 
 To be defined by the author.

@@ -33,7 +33,8 @@ import logging
 import pathlib
 
 import cv2
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -80,6 +81,11 @@ log = logging.getLogger(__name__)
 #: Cadence de référence quand la vidéo n'annonce pas la sienne (codec exotique,
 #: conteneur mal écrit). 25 i/s est le standard des caméras de surveillance.
 FPS_REPLI = 25.0
+
+#: Lien du bouton de soutien. Le `data-slug` du widget Buy Me a Coffee fourni
+#: par l'opérateur est `galaxiel` — le bouton natif ouvre cette page dans le
+#: navigateur, ce qui donne le même résultat sans embarqué de JavaScript.
+LIEN_SOUTIEN = "https://buymeacoffee.com/galaxiel"
 
 #: Durée du flash rouge de comptage, en frames AFFICHÉES. Le flash sert à
 #: repérer d'un coup d'œil l'instant d'un comptage ; le compter en frames
@@ -354,6 +360,18 @@ class FenetrePrincipale(QMainWindow):
             barre.addWidget(b)
         colonne.addLayout(barre)
 
+        # Bouton de soutien, discret, tout en bas sous la barre de boutons.
+        # Ce n'est pas un réglage : il ouvre simplement la page de don dans le
+        # navigateur. Pas de JS, pas de widget web — un lien natif, qui marche
+        # hors ligne et ne ralentit rien.
+        self.btn_soutenir = QPushButton("☕ Buy me a coffee")
+        self.btn_soutenir.setObjectName("soutenir")
+        self.btn_soutenir.setToolTip(
+            "Soutenir le développement du compteur — ouvre la page de don "
+            "dans ton navigateur."
+        )
+        colonne.addWidget(self.btn_soutenir, alignment=Qt.AlignmentFlag.AlignHCenter)
+
         # Traitement : intervalle 0, donc « aussi vite que possible ». C'est
         # le GPU qui fixe la cadence de cette minuterie, jamais un réglage
         # utilisateur : l'analyse va aussi vite que la machine le permet.
@@ -371,6 +389,7 @@ class FenetrePrincipale(QMainWindow):
         self.btn_lancer.clicked.connect(self.lancer)
         self.btn_pause.clicked.connect(self._basculer_pause)
         self.btn_stop.clicked.connect(self.arreter)
+        self.btn_soutenir.clicked.connect(self._on_soutenir)
         self.video.clic.connect(self._on_clic_video)
         self.video.deplacement.connect(self._on_deplacement_video)
         self.video.deplacement_fini.connect(self._on_deplacement_fini)
@@ -468,6 +487,25 @@ class FenetrePrincipale(QMainWindow):
             return
         boite = QMessageBox.critical if grave else QMessageBox.warning
         boite(self, titre, message)
+
+    def _on_soutenir(self) -> None:
+        """Ouvre la page de don dans le navigateur par défaut.
+
+        L'échec d'ouverture (navigateur absent, aucune application liée au
+        protocole http) n'est pas une erreur grave : il est journalisé et
+        signalé dans la barre de statut, sans boîte modale qui interromprait
+        l'analyse.
+        """
+        if QDesktopServices.openUrl(QUrl(LIEN_SOUTIEN)):
+            self.label_statut.setText(
+                "Ouverture de la page de soutien dans le navigateur…"
+            )
+        else:
+            log.warning("impossible d'ouvrir le navigateur vers %s", LIEN_SOUTIEN)
+            self.label_statut.setText(
+                "Impossible d'ouvrir le navigateur — copie le lien : "
+                f"{LIEN_SOUTIEN}"
+            )
 
     # -- Actions : la vidéo ----------------------------------------------
 

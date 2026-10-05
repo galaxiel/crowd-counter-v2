@@ -1147,6 +1147,34 @@ def test_la_boite_comptee_suit_la_personne_et_suit_le_glisser(
     assert f.ligne.p1 == p_avant, "le glissement a bougé une ligne verrouillée"
 
 
+# -- Bouton de soutien -----------------------------------------------------
+
+
+def test_le_bouton_de_soutien_existe_et_ouvre_le_bon_lien(
+    application, fenetre, monkeypatch
+):
+    """Le bouton « Buy me a coffee » ouvre la page de don de l'opérateur.
+
+    Le widget fourni est un script JavaScript pour page web ; dans une
+    application de bureau il est remplacé par un bouton natif qui ouvre le
+    même lien dans le navigateur par défaut. Le `data-slug` (galaxiel) devient
+    la partie du chemin de l'URL.
+    """
+    from interface.app import LIEN_SOUTIEN
+
+    f = fenetre
+    assert f.btn_soutenir.text() == "☕ Buy me a coffee"
+    assert LIEN_SOUTIEN == "https://buymeacoffee.com/galaxiel"
+
+    ouverts = []
+    monkeypatch.setattr(
+        "interface.app.QDesktopServices.openUrl",
+        lambda url: (ouverts.append(url.toString()) or True),
+    )
+    f._on_soutenir()
+    assert ouverts == [LIEN_SOUTIEN], "le clic doit ouvrir la page de don"
+
+
 def _evenement_souris(x, y, relâché: bool = False):
     """Construit un QMouseEvent de presse (ou de relâchement) en coordonnées
     WIDGET, comme le fait Qt pour un vrai geste."""
