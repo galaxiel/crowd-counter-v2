@@ -554,4 +554,12 @@ link](https://buymeacoffee.com/galaxiel)) opens the page directly.
 
 ## Licence
 
-To be defined by the author.
+The code in this repository (the `compteur/`, `interface/` and `tools/`
+packages, `main.py`, tests) is released under the [MIT
+License](LICENSE) — open to everyone, all modifications, commercial use
+included. The only requirement is keeping the copyright notice.
+
+The **pre-trained models** (`medium.pt`, `yolov8n-head.pt`, …) are **not**
+part of the repository and are **not** covered by the MIT license: they come
+from their own sources (Ultralytics YOLO and SCUT-HEAD) and keep their own
+licenses. They are downloaded or copied separately by the user.
