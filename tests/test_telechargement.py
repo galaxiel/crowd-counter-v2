@@ -42,6 +42,26 @@ from compteur import telechargement as tl
 # ---------------------------------------------------------------------------
 
 
+class _HorlogeFake:
+    """Faux `time.monotonic`, piloté à la main.
+
+    La progression est une fonction du TEMPS ÉCOULÉ. Sans cette horloge, un
+    test qui enchaîne cinq battements pourrait les lire dans la même
+    milliseconde sur une machine rapide, et passerait à la vitesse — il
+    échouerait ensuite sur un poste chargé, sans qu'une ligne de code ait
+    changé. Un test de progression doit donc commander le temps, pas le subir.
+    """
+
+    def __init__(self) -> None:
+        self._t = 1000.0
+
+    def avance(self, secondes: float) -> None:
+        self._t += secondes
+
+    def monotonic(self) -> float:
+        return self._t
+
+
 # ---------------------------------------------------------------------------
 # 1. Le garde-fou : torch doit venir de NOTRE dossier
 # ---------------------------------------------------------------------------
@@ -283,17 +303,97 @@ def test_la_sortie_de_uv_produit_deux_phases_distinctes():
     assert suivi.total() == int(12.0 * 1024**2) + int(2.4 * 1024**3)
 
 
-def test_un_paquet_en_cours_compte_pour_la_moitie():
-    """Un téléchargement en cours doit faire AVANCER la barre.
+def test_le_format_reel_de_uv_est_sans_doublure_de_calcul():
+    """Les marqueurs de `uv` 0.7.0, tels qu'ils sont ÉCRITS, pas tels qu'on les imaginait.
 
-    Sans cela, la barre reste à 0 % pendant les 2,4 Go de torch et paraît
-    gelée — l'utilisateur en déduit un blocage et tue le processus.
+    Relevé sur une installation réelle, sortie brute octet par octet :
+
+        Downloading torch (118.2MiB)      <- début, PAS d'espace initial
+         Downloading torch                <- FIN, avec un ESPACE initial
+
+    `Downloaded torch` **n'existe pas** dans `uv` 0.7.0. Le code le reconnaît
+    quand même (d'autres versions l'écrivent), mais la forme réelle est la
+    seconde — et c'est ELLE qui doit rester distinguée.
+
+    Le défaut que ce test verrouille : après `strip()`, les deux formes
+    deviennent `Downloading torch`, et la fin réenregistre le paquet à 0
+    octet. La taille de torch tombait alors à zéro au moment précis où chaque
+    paquet se terminait — donc à chaque battement — et la barre restait
+    bloquée. C'est mesuré, pas supposé : la vérification de bout en bout
+    contre un vrai `uv` montrait `fait` figé à 9,5 Mo pendant tout torch.
     """
     suivi = tl._SuiviTelechargement()
-    avant = suivi.ligne("Downloading torch (2.4GiB)")
-    assert avant is not None
-    assert avant.fait > 0, "un paquet commencé doit déjà compter"
-    assert avant.fait < avant.total
+    suivi.ligne("Downloading torch (118.2MiB)")
+    assert suivi.attendus["torch"] == int(118.2 * 1024**2)
+
+    # La forme réelle de fin : espace initial, pas de taille.
+    p = suivi.ligne(" Downloading torch")
+    assert p is not None, "la fin d'un paquet doit être reconnue"
+    assert suivi.attendus["torch"] == int(118.2 * 1024**2), (
+        "la fin d'un paquet ne doit surtout pas effacer sa taille"
+    )
+    assert p.fait == int(118.2 * 1024**2), "le paquet fini compte en entier"
+
+
+def test_la_taille_annoncee_ne_s_ecrase_pas_une_taille_connue():
+    """`Downloading X` sans taille ne doit pas remettre X à zéro.
+
+    `uv` répète parfois une ligne de début. Si la seconde arrive sans taille,
+    un `attendus[nom] = 0` ferait chuter le total d'un coup — donc faire
+    RECULER la barre alors que le téléchargement avance.
+    """
+    suivi = tl._SuiviTelechargement()
+    suivi.ligne("Downloading torch (118.2MiB)")
+    avant = suivi.total()
+    suivi.ligne("Downloading torch")
+    assert suivi.total() == avant, "une répétition sans taille ne doit rien changer"
+
+
+def test_la_progression_augmente_pendant_un_paquet_en_cours(monkeypatch):
+    """LE défaut le plus visible du logiciel : la barre est figée, puis saute.
+
+    Symptôme observé par l'utilisateur : 0 % pendant les ~2 minutes du
+    téléchargement de torch, puis 100 %. Rien entre les deux.
+
+    On vérifie donc que la progression AUGMENTE sur plusieurs battements de
+    cœur. `battement()` est ce que la boucle appelle quand `uv` se tait — et
+    `uv` se tait pendant TOUTE la durée du gros paquet, mesuré : `Downloading
+    torch` à t=0,5 s, `Downloaded torch` à t=16,2 s, rien entre les deux.
+
+    L'horloge est simulé (faux `time.monotonic`) : sinon le test dépendrait de
+    la vitesse de la machine et pourrait lire deux battements dans la même
+    milliseconde — il passerait sur une machine rapide et échouerait sur une
+    machine chargée, sans que le code ait changé.
+    """
+    horloge = _HorlogeFake()
+    monkeypatch.setattr(tl, "time", horloge)
+
+    suivi = tl._SuiviTelechargement()
+    debut = suivi.ligne("Downloading torch (2.4GiB)")
+    assert debut is not None
+    assert debut.fait < debut.total, "un paquet commencé ne peut pas être fini"
+
+    valeurs = [debut.fait]
+    for _ in range(5):
+        horloge.avance(1.0)
+        battement = suivi.battement()
+        assert battement is not None, "un paquet en cours doit produire un battement"
+        valeurs.append(battement.fait)
+
+    assert valeurs == sorted(valeurs), f"la barre recule : {valeurs}"
+    assert valeurs[-1] > valeurs[0], (
+        f"la barre n'avance pas sur les battements : {valeurs}"
+    )
+    assert all(0 <= v <= int(2.4 * 1024**3) for v in valeurs), (
+        f"la barre sort des bornes du paquet : {valeurs}"
+    )
+
+    # Un battement hors téléchargement se tait : une progression sans fait
+    # ferait dire « terminé » trop tôt.
+    suivi.ligne("Downloaded torch")
+    horloge.avance(1.0)
+    assert suivi.battement() is None
+
 
 
 def test_la_barre_ne_recule_jamais():

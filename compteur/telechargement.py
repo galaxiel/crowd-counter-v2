@@ -43,9 +43,12 @@ import json
 import logging
 import os
 import pathlib
+import queue
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from typing import Callable, NamedTuple
 
 log = logging.getLogger(__name__)
@@ -533,6 +536,21 @@ def _analyser_taille(texte: str) -> int:
         return 0
 
 
+#: Cadence du battement de cœur qui anime la barre quand `uv` se tait.
+#:
+#: 0,25 s : assez fin pour que la barre bouge à l'œil (quatre rafraîchissements
+#: par seconde), assez large pour ne pas inonder la boucle d'événements Qt.
+BATTEMENT_PROGRESSION = 0.25
+
+#: Débit supposé tant qu'aucune mesure n'a pu être faite, en octets/seconde.
+#:
+#: Valeur volontairement MODESTE (5 Mo/s, une connexion grand public). Elle ne
+#: sert qu'à faire bouger la barre entre le début du téléchargement de torch et
+#: la première mesure réelle. La surestimer ferait racedevancer la barre vers
+#: 100 % puis la figerait — exactement le défaut qu'on répare, déplacé.
+DEBIT_INITIAL = 5 * 1024**2
+
+
 class _SuiviTelechargement:
     """Traduit les lignes de `uv` en progression, paquet par paquet.
 
@@ -541,11 +559,40 @@ class _SuiviTelechargement:
         Downloading torch (2.4GiB)
          Downloaded torch
 
-    Il n'expose PAS de progression à l'octet près. On ne l'invente pas : mesurer
-    le dossier de cache pendant l'écriture donnerait une fausse précision qui
-    sauterait en arrière. On compte donc les paquets, ce qui est honnête — et
-    le poids de torch rend le premier bond normal : 2,4 Go sur 2,5 Go, c'est le
-    téléchargement.
+    **Et RIEN ENTRE LES DEUX. C'est mesuré, pas supposé.** Sur une
+    installation réelle de `uv` 0.7.0 (10 paquets, roue de 118 Mo), la sortie
+    se réduit à : `Downloading torch` à t=0,52 s, puis `Downloaded torch` à
+    t=16,2 s. Seize secondes de silence pour un seul paquet. Remettre
+    `UV_NO_PROGRESS=0` ne change rien : sans terminal, `uv` n'écrit pas sa
+    barre. Parser des « intervalles d'octets » est donc IMPOSSIBLE — il n'y a
+    rien à parser.
+
+    Reste la mesure physique : la taille du dossier de cache, qui croît pour de
+    vraies raisons. **Écartée elle aussi, pour deux raisons mesurées** :
+    `uv` décompresse la roue en des milliers de petits fichiers dans des
+    `.tmpXXXX/`, donc le dossier ne mesure plus l'octet téléchargé mais l'octet
+    DÉCOMPACTÉ, et le rapport entre les deux n'est pas connu ; surtout le scan
+    récursif coûte 1,2 à 3,3 s pour 15 000 fichiers — un battement de cœur
+    qui vole 25 % du temps à l'utilisateur pour lire un pourcentage faux.
+
+    **Il reste donc à ESTIMER**, et c'est un choix assumé : l'utilisateur n'a
+    pas besoin d'exactitude, il a besoin de voir que ça avance. Une barre qui
+    avance doucement sur une estimation est meilleure qu'une barre figée sur
+    une valeur exacte.
+
+    L'estimation est ancrée sur le débit RÉELLEMENT mesuré. Dès qu'un paquet
+    se termine, on connaît un nombre d'octets et un nombre de secondes : le
+    débit suit. Entre deux fins de paquet, la barre avance à ce débit — donc
+    elle accélère sur une bonne connexion et ralentit sur une mauvaise, ce qui
+    est l'inverse d'une barre qui ne bouge pas.
+
+    Trois invariantes tiennent, quelles que soient les mesures :
+
+    - **monotone** : `fait` ne recule JAMAIS ;
+    - **plafonnée** : `fait <= total` ;
+    - **jamais 100 % avant la fin** : le total de référence mesuré à l'avance
+      reste le plancher, donc tant que torch n'est pas arrivé la barre ne peut
+      pas afficher « terminé ».
     """
 
     def __init__(self, total_attendu: int = 0) -> None:
@@ -572,35 +619,222 @@ class _SuiviTelechargement:
         #: le compléter par ce que `uv` annonce. Le pourcentage ne peut plus
         #: ni mentir ni reculer.
         self._total_ref = total_attendu
+        #: Ce que vaut `fait` au dernier battement. Sert de plancher : c'est
+        #: lui qui rend la progression monotone, quelle que soit la mesure.
+        self._plancher = 0
+        #: nom -> (instant d'annonce, octets ESTIMES). Un paquet reste dans ce
+        #: dictionnaire tant qu'il n'est pas fini.
+        #:
+        #: **Plusieurs paquets a la fois, et c'est mesure** : `uv` telecharge en
+        #: parallele — sur l'installation de reference, torch (118 Mo), sympy
+        #: (6 Mo), networkx (2 Mo) et setuptools (1,2 Mo) sont TOUS en cours
+        #: entre t=0,8 s et t=5,2 s. Ne suivre qu'UN paquet en cours perdait
+        #: torch des que sympy finissait, et la barre se gelait alors pendant
+        #: les 10,5 s restantes : le defecto original, reapparu alors meme
+        #: qu'on le corrigeait.
+        self._en_vol: dict[str, tuple[float, int]] = {}
+        self._partage_total: int = 0
+        #: Débit retenu, en octets/seconde. `None` tant qu'on n'a pas mesuré.
+        self._debit: int | None = None
 
     def ligne(self, texte: str) -> Progression | None:
-        """Interprète une ligne. Renvoie une progression ou `None`."""
-        t = texte.strip()
+        """Interprète un fragment de sortie de `uv`. `None` si rien à dire.
+
+        **Les deux marqueurs ne se ressemblent pas, et c'est mesuré.** Sur une
+        installation réelle, `uv` 0.7.0 écrit :
+
+            Downloading torch (118.2MiB)     <- début, PAS d'espace initial
+             Downloading torch               <- FIN, avec un ESPACE initial
+
+        Le second n'est PAS `Downloaded torch` — cette forme n'existe pas dans
+        `uv` 0.7.0. Et `uv` télécharge plusieurs paquets en parallèle : les fins
+        arrivent dans un ordre IMPRÉDICTIBLE, pas dans l'ordre des débuts.
+
+        Les distinguer par la seule présence d'une taille serait donc faux :
+        ` Downloading torch` n'a pas de taille, et le prendre pour un début
+        réenregistrerait `torch` à 0 octets — ce qui remit le total et la barre
+        à zéro, définitivement. L'espace initial EST l'information, et il faut
+        le lire AVANT tout `strip()`. C'est exactement le bug que la
+        vérification de bout en bout a fait apparaître.
+        """
+        # `rstrip` seulement : l'espace initial porte le sens.
+        t = texte.rstrip()
+        if not t:
+            return None
+
+        # -- FIN d'un paquet. Forme MESURÉE : un espace initial, et le mot
+        # `Downloading` — pas `Downloaded`. C'est la seule information qui
+        # distingue la fin du début, puisque la fin ne porte pas de taille.
+        if t.startswith(" "):
+            nom = t.strip()
+            for prefixe in ("Downloaded ", "Downloading "):
+                if nom.startswith(prefixe):
+                    return self._paquet_fini(nom[len(prefixe):].strip())
+            return None
+
+        # `Downloaded X` reste accepté : d'autres versions de `uv` l'écrivent
+        # ainsi, et refuser cette forme ferait perdre la seule mesure de débit.
+        if t.startswith("Downloaded "):
+            return self._paquet_fini(t[len("Downloaded "):].strip())
+
         if t.startswith("Downloading "):
             corps = t[len("Downloading "):].strip()
             nom, _, reste = corps.partition(" ")
-            self.attendus[nom] = _analyser_taille(reste.strip("()"))
-            return self._progression(f"Téléchargement de {nom}", nom)
-        if t.startswith("Downloaded "):
-            nom = t[len("Downloaded "):].strip()
-            self.recus[nom] = self.attendus.get(nom, 0)
-            return self._progression(f"{nom} téléchargé", nom)
+            taille = _analyser_taille(reste.strip("()"))
+            # On n'écrase PAS une taille déjà connue : `uv` peut répéter la
+            # ligne de début, et un 0 ici effacerait le total.
+            if taille > 0 or nom not in self.attendus:
+                self.attendus[nom] = taille
+            # Ouverture du téléchargement. On NE REMPLACE PAS l'ensemble des
+            # paquets en vol : `uv` en lance plusieurs à la fois.
+            if nom not in self._en_vol:
+                self._en_vol[nom] = (time.monotonic(), 0)
+            return self._progression(f"Téléchargement de {nom}")
         return None
+
+    def _paquet_fini(self, nom: str) -> Progression | None:
+        """Enregistre la FIN d'un paquet et en déduit le débit mesuré.
+
+        Méthode à part parce que cette branche est la SEULE qui donne un
+        nombre d'octets exact — donc la seule qui puisse calibrer
+        l'estimation entre deux fins de paquet.
+        """
+        if nom not in self.attendus:
+            # Fin d'un paquet jamais vu commencer : sans taille, on ne peut
+            # rien mesurer. Plutôt que de dégrader la barre, on se tait.
+            return None
+        taille = self.attendus[nom]
+        maintenant = time.monotonic()
+        # MESURE DU DÉBIT : un paquet terminé donne un nombre d'octets ET un
+        # nombre de secondes.
+        debut = self._en_vol.get(nom)
+        if debut is not None and maintenant - debut[0] > 0.2:
+            mesure = int(taille / (maintenant - debut[0]))
+            # Lissage : le débit d'un seul petit paquet est du bruit — 1,2 Mo
+            # partis en 0,4 s feraient croire à 3 Mo/s, un gros à 30. On
+            # moyenne les mesures.
+            self._debit = (
+                mesure if self._debit is None
+                else (self._debit + mesure) // 2
+            )
+        self.recus[nom] = taille
+        self._en_vol.pop(nom, None)
+        return self._progression(f"{nom} téléchargé")
+
+
+    def battement(self) -> Progression | None:
+        """Progression ESTIMÉE, sans nouvel événement de `uv`.
+
+        C'est ce que la boucle appelle en attendant la sortie de `uv`. Sans
+        elle, la barre reste figée pendant les 2,4 Go de torch — le défaut
+        qu'on répare ici.
+
+        Renvoie `None` quand il n'y a rien à dire : aucun paquet en cours,
+        donc aucune estimation à faire. Une progression sans fait ni vitesse
+        ne ferait qu'embrouiller l'interface.
+        """
+        if not self._en_vol:
+            return None
+        # Le nom affiché est celui du plus gros paquet encore en vol : c'est
+        # lui que l'utilisateur attend, et le minuscule se termine en 0,4 s.
+        nom = max(self._en_vol, key=lambda n: self.attendus.get(n, 0))
+        return self._progression(f"Téléchargement de {nom}")
 
     def total(self) -> int:
         return sum(self.attendus.values())
 
-    def _progression(self, texte: str, nom: str) -> Progression:
-        import time
+    def _part_de(self, nom: str, debut: float) -> float:
+        """Fraction du débit total qui revient à ce paquet.
 
-        total = self.total()
-        fait = sum(self.recus.values())
-        # Un paquet en cours compte pour la moitié : sans ça la barre reste
-        # collée au même pourcentage pendant 2,4 Go de torch, et paraît gelée.
-        if nom not in self.recus:
-            fait += self.attendus.get(nom, 0) // 2
+        `uv` télécharge plusieurs paquets en parallèle et se partage la bande
+        passante entre eux. Le débit qu'on mesure est donc celui de l'ensemble,
+        pas celui d'un paquet. L'appliquer tel quel au plus gros le plafonne
+        dès que la phase parallèle s'arrête et que ce débit partagé reste en
+        mémoire — mesuré : l'estimation de torch se figeait à 9,2 Mo pendant 8
+        des 15 s de son téléchargement.
 
+        On répartit donc au PRORATA des tailles. C'est approximatif — `uv` ne
+        dit rien de sa répartition — mais deux propriétés suffisent à
+        l'utilisateur : la somme des estimations reste cohérente avec le débit
+        réellement mesuré, et un paquet seul récupère bien 100 % du débit.
+
+        Seuls les paquets qui DÉBUTENT À LA MÊME INSTANT partagent
+        le débit. Un paquet déjà seul ne doit pas être pénalisé par le
+        découpage : torch, seul après t=3 s, doit récupérer tout le débit.
+        """
+        taille = self.attendus.get(nom, 0)
+        if taille <= 0:
+            return 0.0
+        # tolerance generous : deux paquets annonces a quelques dizaines de ms
+        # l'un de l'autre partagent la connexion.
+        memes = [
+            n for n, (d2, _) in self._en_vol.items()
+            if abs(d2 - debut) < 0.25 and self.attendus.get(n, 0) > 0
+        ]
+        if len(memes) <= 1:
+            return 1.0
+        total = sum(self.attendus.get(n, 0) for n in memes)
+        return taille / total if total else 0.0
+
+
+    def _progression(self, texte: str) -> Progression:
         maintenant = time.monotonic()
+        total = max(self.total(), self._total_ref)
+        if total <= 0:
+            return Progression(
+                phase=PHASE_TELECHARGEMENT,
+                texte=texte,
+                fait=0,
+                total=1,
+                vitesse=0,
+                restant=-1,
+            )
+
+        # Paquets terminés : nombre d'octets EXACT.
+        fait = sum(self.recus.values())
+
+        # Paquets en vol : nombre d'octets ESTIMÉS, au débit mesuré.
+        #
+        # Deux corrections, chacune tirée d'une mesure, chacune nécessaire.
+        #
+        # **1. L'estimation se calcule DEPUIS LE DÉBUT du paquet**, et non
+        # depuis le dernier battement : c'est le temps écoulé qui la fait
+        # croître. La recalculer à chaque battement depuis zéro la ferait
+        # stagner — c'est-à-dire afficher le défaut qu'on répare.
+        #
+        # **2. Le débit mesuré vaut pour l'ensemble des téléchargements en
+        # cours.** Quand `uv` télécharge plusieurs paquets en parallèle — ce
+        # qu'il fait, mesuré : torch, sympy, networkx et setuptools sont tous
+        # en vol jusqu'à t≈3 s — ce débit est PARTAGÉ. L'appliquer tel quel au
+        # plus gros paquet le plafonnait à 9,2 Mo dès t=3 s, et il y restait
+        # ensuite : la barre se gelait de t=3 s à t=10,7 s, soit 8 des 15 s du
+        # gros téléchargement. D'où `_part_de`, qui donne à chaque paquet la
+        # fraction du débit qui lui revient.
+        if self._en_vol:
+            debit = self._debit or DEBIT_INITIAL
+            for nom, (debut, deja) in list(self._en_vol.items()):
+                cible = self.attendus.get(nom, 0)
+                if cible <= 0:
+                    # Taille inconnue : on ne peut rien estimer pour ce
+                    # paquet, et surtout pas le faire mentir avec les autres.
+                    continue
+                ecoule = max(0.0, maintenant - debut)
+                part = debit * self._part_de(nom, debut)
+                # Jamais plus que la taille du paquet, jamais moins que ce
+                # qu'on avait déjà affiché pour lui.
+                estime = max(deja, min(cible, int(part * ecoule)))
+                if estime != deja:
+                    self._en_vol[nom] = (debut, estime)
+                    fait += estime
+
+        # Monotone : le plancher est la valeur déjà affichée. C'est
+        # l'invariant qui protège l'affichage d'un reflux, quelle que soit
+        # la finesse de l'estimation.
+        fait = max(fait, self._plancher, 0)
+        fait = min(fait, total)
+        self._plancher = fait
+
+        # Vitesse : mesurée sur ce que l'interface vient de voir réellement.
         vitesse = 0
         if self._precedente is not None:
             avant_t, avant_octets = self._precedente
@@ -610,16 +844,6 @@ class _SuiviTelechargement:
                 self._precedente = (maintenant, fait)
         else:
             self._precedente = (maintenant, fait)
-
-        # Le total est le max de ce qu'on sait et de ce qu'on a déjà atteint.
-        #
-        # `uv` annonce les paquets AU FUR ET À MESURE : tant que torch (2,4 Go)
-        # n'est pas annoncé, le total ne vaut que les petits paquets déjà vus,
-        # et `fait / total` vaut 100 % — la barre affiche « terminé » alors
-        # que 2,4 Go restent à venir. Le plancher évite l'écart inverse : si
-        # le total bondit après coup (torch annoncé en dernier), le
-        # pourcentage retombe de 100 % à 0 %, ce qui paraît buggé.
-        total = max(total, self._total_ref)
 
         return Progression(
             phase=PHASE_TELECHARGEMENT,
@@ -926,6 +1150,11 @@ def _installer_avec_uv(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=_environnement(dossier),
+            # `bufsize=0` : aucune tamponisation côté Python, donc `read()` rend
+            # ce que `uv` a DÉJÀ écrit, sans attendre de remplir un tampon.
+            # C'est la condition pour que le battement de cœur ait quelque
+            # chose à lire en temps réel.
+            bufsize=0,
         )
     except OSError as exc:
         raise ErreurInstallation(
@@ -935,58 +1164,144 @@ def _installer_avec_uv(
 
     suivi = _SuiviTelechargement(taille_attendue(cuda))
     sortie = b""
+
+    # -- Lecture dans un fil séparé, fragments dans une file.
+    #
+    # Le problème : `uv` écrit `Downloading torch`, puis plus RIEN pendant les
+    # 2,4 Go (mesuré, voir `_SuiviTelechargement`). Une boucle qui fait
+    # `for ligne in proc.stdout` reste donc BLOQUÉE sur `read()` pendant toute
+    # la durée du téléchargement, et aucun battement de cœur ne peut être
+    # émis — la barre est figée par construction, indépendamment de ce qu'on
+    # calcule. Séparer la lecture du traitement est donc ce qui rend la barre
+    # vivante.
+    fragments: queue.Queue = queue.Queue()
+
+    def _lire() -> None:
+        """Lit le flux et dépose des FRAGMENTS, pas des lignes.
+
+        Fil démon : s'il survit à la fin du processus, il n'empêche rien de
+        se terminer.
+        """
+        flux = proc.stdout
+        if flux is None:  # pragma: no cover — PIPE est toujours là
+            fragments.put(None)
+            return
+        tampon = b""
+        try:
+            while True:
+                # Par MORCEAUX de 4096, pas octet par octet. Mesuré sur
+                # 10 Mo de texte : 0,31 s en 4096 octets, 4,07 s octet par
+                # octet. Le volume réel de `uv` est de l'ordre de 10 ko —
+                # les deux marcheraient — mais 4096 voit les retours chariot
+                # arriver en temps réel sans coût notable.
+                morceau = flux.read(4096)
+                if not morceau:
+                    break
+                tampon += morceau
+                # Découpe sur le retour chariot ET le saut de ligne. Itérer
+                # sur `proc.stdout` directement n'attendrait que le saut de
+                # ligne final, c'est-à-dire la fin du téléchargement.
+                while True:
+                    i_nl = tampon.find(b"\n")
+                    i_cr = tampon.find(b"\r")
+                    if i_nl == -1 and i_cr == -1:
+                        break
+                    if i_nl == -1:
+                        i = i_cr
+                    elif i_cr == -1:
+                        i = i_nl
+                    else:
+                        i = min(i_nl, i_cr)
+                    fragment = tampon[:i]
+                    tampon = tampon[i + 1:]
+                    if fragment.strip():
+                        fragments.put(fragment)
+        except (OSError, ValueError) as exc:
+            # Fin de lecture (processus tué) : sortie propre, l'erreur réelle
+            # remonte par le code de retour.
+            log.debug("lecture de la sortie de uv interrompue : %s", exc)
+        finally:
+            fragments.put(None)  # sentinelle : plus rien à lire
+
+    lecteur = threading.Thread(target=_lire, name="uv-lecture", daemon=True)
+    lecteur.start()
+
+    def _traiter(fragment: bytes) -> None:
+        """Applique un fragment de sortie de `uv` aux deux phases.
+
+        Le fragment est passé à `suivi.ligne()` **sans `strip()`** : l'espace
+        initial de ` Downloading torch` est ce qui distingue la fin d'un
+        paquet de son début. Le retirer ici ferait réenregistrer le paquet à
+        0 octet — mesuré : la barre se remettait à zéro au moment précis où
+        chaque paquet se terminait.
+        """
+        texte = _decoder(fragment)
+
+        # -- Phase 1 : téléchargement.
+        progression = suivi.ligne(texte)
+        if progression is not None:
+            callback(progression)
+            return
+
+        # Ici le `strip()` ne gêne plus : on a affaire à des phases, et non
+        # à un paquet dont la taille compte.
+        bas = texte.strip().lower()
+
+        # -- Bascule en phase 2, à l'instant où `uv` décompresse.
+        if bas.startswith(("prepared ", "preparing ", "unpack")):
+            total_telecharge = suivi.total()
+            callback(
+                Progression(
+                    phase=PHASE_TELECHARGEMENT,
+                    texte="Téléchargement terminé",
+                    fait=total_telecharge,
+                    total=total_telecharge or 1,
+                    vitesse=0,
+                    restant=0,
+                )
+            )
+            callback(
+                Progression(
+                    phase=PHASE_INSTALLATION,
+                    texte="Décompression des fichiers",
+                    fait=0,
+                    total=max(1, len(suivi.attendus)),
+                    vitesse=0,
+                    restant=-1,
+                )
+            )
+            return
+
+        if bas.startswith("installed "):
+            total = suivi.total() or 1
+            callback(
+                Progression(
+                    phase=PHASE_INSTALLATION,
+                    texte="Installation terminée",
+                    fait=total,
+                    total=total,
+                    vitesse=0,
+                    restant=0,
+                )
+            )
+
+
     try:
-        for ligne in proc.stdout:  # type: ignore[union-attr]
-            sortie += ligne
-            texte = _decoder(ligne).strip()
-            if not texte:
+        while True:
+            try:
+                fragment = fragments.get(timeout=BATTEMENT_PROGRESSION)
+            except queue.Empty:
+                # Aucun fragment, mais le téléchargement continue : c'est
+                # exactement le cas de torch, 94 s d'affilée. Sans ce
+                # battement, la barre est figée — le défaut qu'on répare.
+                battement = suivi.battement()
+                if battement is not None:
+                    callback(battement)
                 continue
-
-            # -- Phase 1 : téléchargement.
-            progression = suivi.ligne(texte)
-            if progression is not None:
-                callback(progression)
-                continue
-
-            bas = texte.lower()
-
-            # -- Bascule en phase 2, à l'instant où `uv` décompresse.
-            if bas.startswith(("prepared ", "preparing ", "unpack")):
-                total_telecharge = suivi.total()
-                callback(
-                    Progression(
-                        phase=PHASE_TELECHARGEMENT,
-                        texte="Téléchargement terminé",
-                        fait=total_telecharge,
-                        total=total_telecharge or 1,
-                        vitesse=0,
-                        restant=0,
-                    )
-                )
-                callback(
-                    Progression(
-                        phase=PHASE_INSTALLATION,
-                        texte="Décompression des fichiers",
-                        fait=0,
-                        total=max(1, len(suivi.attendus)),
-                        vitesse=0,
-                        restant=-1,
-                    )
-                )
-                continue
-
-            if bas.startswith("installed "):
-                total = suivi.total() or 1
-                callback(
-                    Progression(
-                        phase=PHASE_INSTALLATION,
-                        texte="Installation terminée",
-                        fait=total,
-                        total=total,
-                        vitesse=0,
-                        restant=0,
-                    )
-                )
+            if fragment is None:
+                break
+            sortie += fragment
+            _traiter(fragment)
     finally:
         if proc.stdout is not None:
             proc.stdout.close()
