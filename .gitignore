@@ -20,7 +20,10 @@ rapport.json
 config/local_*.json
 
 build/
+build-v2/
+build-venv/
 dist/
+*.log
 
 # Fichiers de build PyInstaller générés par défaut (`--onefile` en produit
 # un éphémère) : on garde SEULEMENT les .spec du projet, qui sont la
