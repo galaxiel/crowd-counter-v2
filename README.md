@@ -282,7 +282,36 @@ the single most common packaging mistake here.
 Result: `dist/CompteurManifestation/` — the executable, its `_internal/` folder
 and the weights next to it. **4.3 GB**, launching in ~1.3 s.
 
-### Verify it before shipping it
+### Building v2 — torch downloaded at first launch
+
+Same clean-env rule applies — **never** build v2 from a global Python that has
+TensorFlow, Playwright, DeepSpeed, wandb etc. installed. Ultralytics
+imports its optional backends conditionally, and PyInstaller bundles whatever is
+installed: a polluted interpreter makes the build balloon and take ~15× longer.
+
+```bash
+# 1. clean environment, nothing else in it
+python -m venv build-env
+
+# 2. torch CUDA + matching torchvision MUST come from the same index
+build-env\Scripts\python -m pip install torch==2.14.1+cu126 torchvision==0.29.1+cu126 ^
+    --index-url https://download.pytorch.org/whl/cu126
+
+# 3. the rest — from PyPI, never from the torch index
+build-env\Scripts\python -m pip install ultralytics opencv-python PySide6 pyinstaller pytest
+
+# 4. build — note the v2 spec and the workpath
+build-env\Scripts\python -m PyInstaller --clean --workpath build/v2 crowd-counter-v2.spec
+build-env\Scripts\python tools/copier_modeles.py
+```
+
+Result: `dist/CompteurManifestationV2/` — ~290 MB without the weights
+(~360–400 MB with them). torch is NOT bundled; it is downloaded into
+`%LOCALAPPDATA%\CompteurManifestation\` on first launch. The `--workpath
+build/v2` is required — the v2 spec analyses far more modules than the v1 one,
+and sharing the v1 workpath mixes their `.toc` files.
+
+### Verify the build before shipping it
 
 ```bash
 build-env\Scripts\python tools/verifier_lancement_exe.py
