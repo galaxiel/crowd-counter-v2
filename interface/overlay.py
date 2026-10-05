@@ -57,7 +57,7 @@ def dessiner(
     ligne: "Ligne | None" = None,
     afficher_ids: bool = True,
     flash: bool = False,
-    boites_comptees: "list[tuple[int, float, float, float, float, float]] | None" = None,
+    boites_comptees: "list[tuple] | None" = None,
 ) -> np.ndarray:
     """Retourne une copie annotée. ``img`` n'est jamais modifiée.
 
@@ -91,15 +91,17 @@ def dessiner(
     # — le vert doit passer AU-DESSUS, sinon le raté resterait invisible, ce
     # qui viderait la couleur de son but.
     for boite in boites_comptees or []:
-        # Un 5-tuple sans opacité reste accepté : c'est une boîte pleine, et
-        # l'interface n'a pas à changer pour peindre une boîte opaque.
         _frame, x1, y1, x2, y2 = boite[:5]
-        opacite = boite[5] if len(boite) > 5 else 1.0
-        # L'opacité est appliquée au COULEUR, pas à un calque : on mélange le
-        # vert avec le pixel déjà peint sous la boîte. Mélanger l'image
-        # entière pour chaque boîte coûterait une copie de 640x480 par boîte et
-        # jusqu'à 200 boîtes par frame — le vert doit rester免费 par construction.
-        _boite(sortie, x1, y1, x2, y2, _fondre(COULEUR_COMPTEE, sortie, x1, y1, opacite))
+        # La boîte d'une personne COMPTÉE est REMPLIE, pas seulement encadrée :
+        # l'opérateur voit d'un coup d'œil que cette personne est passée, sans
+        # avoir à lire un contour qui ressemble à celui des détections voisines.
+        # On ne voit plus la tête — c'est voulu, le décompage prime sur
+        # l'identification.
+        _boite_pleine(sortie, x1, y1, x2, y2, COULEUR_COMPTEE)
+
+    # L'opacité n'est plus utilisée : les boîtes vertes sont pleines et
+    # s'éteignent net à la sortie de la bande (duree = BANDE_APRES_PX / vitesse).
+    # L'ancienne logique de fondu a été supprimée.
 
     for t in getattr(resultat, "tracks", None) or []:
         cx, cy = int(t.center[0]), int(t.center[1])
@@ -194,3 +196,28 @@ def _fondre(couleur, img, x1, y1, opacite: float) -> tuple:
         int(round(float(c) * opacite + float(f) * (1.0 - opacite)))
         for c, f in zip(couleur, fond)
     )
+
+
+def _boite_pleine(img: np.ndarray, x1: float, y1: float, x2: float, y2: float, couleur) -> None:
+    """Remplit toute la surface d'une boîte comptée, cadre compris.
+
+    Réservé aux personnes COMPTÉES : l'opérateur voit d'un coup d'œil que
+    cette personne est passée, sans lire un contour qui ressemble à celui des
+    détections voisines. On ne voit plus la tête — c'est voulu, le décompage
+    prime sur l'identification.
+
+    La boîte est légèrement plus petite que la détection originale (MARGE_COMPTEE)
+    pour donner un repère visuel : on sait que c'est la même personne, mais
+    le remplissage vert ne couvre plus la zone de bruit autour de la tête.
+    """
+    hauteur, largeur = img.shape[:2]
+    # Réduire de 3 px de chaque côté → la boîte verte est centrée sur la tête
+    # mais un peu plus compacte que la détection d'ambre.
+    MARGE_COMPTEE = 3
+    xa = int(max(0, min(x1, x2))) + MARGE_COMPTEE
+    xb = int(min(largeur, max(x1, x2) + 1)) - MARGE_COMPTEE
+    ya = int(max(0, min(y1, y2))) + MARGE_COMPTEE
+    yb = int(min(hauteur, max(y1, y2) + 1)) - MARGE_COMPTEE
+    if xb <= xa or yb <= ya:
+        return
+    img[ya:yb, xa:xb] = couleur

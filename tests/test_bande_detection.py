@@ -1,10 +1,11 @@
-"""Bande de détection de 200 px — trois propriétés, pas une matrice de cas.
+"""Bande de détection de 250 px — trois propriétés, pas une matrice de cas.
 
 Ce que le rognage apporte, mesuré sur 3000 frames de la vidéo de référence
 (ligne verticale x=640, `sens=-1`) : **231 personnes comptées sur l'image
 entière, 256 sur une bande de 200 px**. Le gain vient du fait que le tracker
 n'a plus à distinguer des dizaines de personnes qui se gênent entre elles
-hors de la zone qui compte.
+hors de la zone qui compte. La bande a depuis été élargie et rendue
+SYMÉTRIQUE (250 px de chaque côté) sur demande de l'opérateur.
 
 Trois tests seulement, choisis pour ce qu'ils prouvent :
 
@@ -93,10 +94,10 @@ def test_la_bande_rogne_l_image_et_les_coordonnees_reviennent_justes():
     lgn = ligne_bandee(x=640.0)
 
     rect = lgn.rect_bande_detection(LARGEUR, HAUTEUR)
-    # sens=1 : le cote de DEPART (coordonnee positive) est a gauche de x=640,
-    # donc 200 px avant et 100 px apres -> 440..740, soit 300 px au total.
-    assert rect == (640 - 200, 0, 640 + 100, HAUTEUR), (
-        "la bande doit faire 200 px avant et 100 px apres la ligne"
+    # Bande SYMÉTRIQUE : 250 px avant ET 250 px apres -> 390..890, soit 500 px
+    # au total (décision opérateur, rapport de tâche 19 mis à jour).
+    assert rect == (640 - 250, 0, 640 + 250, HAUTEUR), (
+        "la bande doit faire 250 px avant et 250 px apres la ligne"
     )
 
     detections = detecteur.detecter(image(), rect)
@@ -106,10 +107,11 @@ def test_la_bande_rogne_l_image_et_les_coordonnees_reviennent_justes():
         f"le modèle a reçu {modele.forme_recue}, la bande n'a pas été appliquée"
     )
     # Et la boîte est revenue dans le repère de l'image pleine : le modèle a
-    # rendu x∈[10,40] DANS LA BANDE, donc x∈[450,480] sur l'image de 1280 —
-    # c'est le BORD de la bande qui sert de décalage, pas le centre de l'image.
+    # rendu x∈[10,40] DANS LA BANDE, donc x∈[400,430] sur l'image de 1280 —
+    # c'est le BORD de la bande (390) qui sert de décalage, pas le centre de
+    # l'image.
     d = detections[0]
-    assert (d.x1, d.x2) == (450.0, 480.0), "coordonnées x non revenues"
+    assert (d.x1, d.x2) == (400.0, 430.0), "coordonnées x non revenues"
     assert (d.y1, d.y2) == (20.0, 60.0), "coordonnées y non revenues"
 
 
@@ -240,11 +242,11 @@ def test_la_bande_suit_la_ligne_quand_on_la_deplace():
     l'écran : c'est ce qui rend ce genre d'oubli si grave.
     """
     lgn = ligne_bandee(x=640.0)
-    assert lgn.rect_bande_detection(LARGEUR, HAUTEUR) == (440, 0, 740, HAUTEUR)
+    assert lgn.rect_bande_detection(LARGEUR, HAUTEUR) == (390, 0, 890, HAUTEUR)
 
     assert lgn.deplacer((900.0, 0.0), (900.0, float(HAUTEUR))) is True
 
-    assert lgn.rect_bande_detection(LARGEUR, HAUTEUR) == (700, 0, 1000, HAUTEUR), (
+    assert lgn.rect_bande_detection(LARGEUR, HAUTEUR) == (650, 0, 1150, HAUTEUR), (
         "la bande n'a pas suivi la ligne"
     )
 
@@ -260,7 +262,7 @@ def test_la_bande_ne_bouge_plus_quand_la_ligne_est_verrouillee():
     lgn.verrouiller()
 
     assert lgn.deplacer((900.0, 0.0), (900.0, float(HAUTEUR))) is False
-    assert lgn.rect_bande_detection(LARGEUR, HAUTEUR) == (440, 0, 740, HAUTEUR)
+    assert lgn.rect_bande_detection(LARGEUR, HAUTEUR) == (390, 0, 890, HAUTEUR)
     assert lgn.p1 == (640.0, 0.0), "un déplacement refusé ne doit rien écrire"
 
     lgn.deverrouiller()
@@ -288,7 +290,7 @@ def test_le_voile_assombrit_hors_de_la_bande_et_pas_dedans():
     r = FrameResult(image=img, detections=[Detection(100, 100, 140, 160, 0.9, 0)])
     sortie = dessiner(img, r, ligne=lgn)
 
-    # x=600 est dans la bande de DÉTECTION (440..740) mais hors de la bande de
+    # x=600 est dans la bande de DÉTECTION (390..890) mais hors de la bande de
     # franchissement (30 px autour de 640) : c'est là qu'on mesure le voile,
     # sans confusion avec l'aperçu translucide que la ligne dessine dessus.
     dans_bande = sortie[50, 600].astype(np.int16).mean()
@@ -299,30 +301,28 @@ def test_le_voile_assombrit_hors_de_la_bande_et_pas_dedans():
     assert hors_bande > 100, f"le voile ne doit pas masquer la scène : {hors_bande}"
 
 
-# -- La dissymétrie 200 / 100 ---------------------------------------------
+# -- La symétrie 250 / 250 ------------------------------------------------
 
 
-def test_la_bande_est_dissymetrique_et_du_bon_cote():
-    """200 px du côté d'où viennent les gens, 100 px de l'autre.
+def test_la_bande_est_symetrique_et_du_bon_cote():
+    """250 px de chaque côté de la ligne.
 
-    C'est le test qui verrouille le SENS de la dissymétrie, pas seulement son
-    existence. Les deux `sens` sont éprouvés parce qu'ils sont le piège de
-    cette géométrie : les deux moitiés d'une bande symétrique sont
-    interchangeables, celles d'une bande dissymétrique ne le sont PAS.
+    La bande a été rendue SYMÉTRIQUE sur demande de l'opérateur (elle était
+    200/100 dissymétrique) : les deux moitiés sont maintenant
+    interchangeables, quel que soit le sens. On vérifie quand même les deux
+    `sens` : un échange des largeurs doit rester sans effet, ce qui est
+    précisément la propriété d'une bande symétrique.
 
     Avec `sens=+1`, le côté de départ (coordonnée positive sur la normale) est
-    à gauche de la ligne ; avec `sens=-1`, il est à droite. Une implémentation
-    qui inverserait les deux largeurs passerait un test qui n'en vérifie qu'un
-    des deux sens — et compterait 100 px de présence avant au lieu de 200,
-   l'erreur serait symétrique et sans aucun signe à l'écran.
+    à gauche de la ligne ; avec `sens=-1`, il est à droite. Une bande
+    symétrique donne le même rectangle dans les deux cas.
     """
     gauche_avant = ligne_bandee(x=640.0, sens=1).rect_bande_detection(LARGEUR, HAUTEUR)
     droite_avant = ligne_bandee(x=640.0, sens=-1).rect_bande_detection(LARGEUR, HAUTEUR)
 
-    assert gauche_avant == (640 - 200, 0, 640 + 100, HAUTEUR)
-    assert droite_avant == (640 - 100, 0, 640 + 200, HAUTEUR)
+    assert gauche_avant == (640 - 250, 0, 640 + 250, HAUTEUR)
+    assert droite_avant == (640 - 250, 0, 640 + 250, HAUTEUR)
 
-    # Et la bande fait bien 300 px au total, pas 200 : c'est ce qui distingue
-    # « dissymétrique » de « symétrique plus étroite ».
-    assert (gauche_avant[2] - gauche_avant[0]) == 300
-    assert (droite_avant[2] - droite_avant[0]) == 300
+    # Et la bande fait bien 500 px au total.
+    assert (gauche_avant[2] - gauche_avant[0]) == 500
+    assert (droite_avant[2] - droite_avant[0]) == 500

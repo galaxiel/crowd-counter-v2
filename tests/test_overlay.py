@@ -191,10 +191,10 @@ def test_une_boite_comptee_est_peinte_en_vert():
         # La personne est ENCORE détectée : c'est le cas réel de tout comptage.
         detections=[Detection(100, 100, 140, 160, 0.9, 0)],
     )
-    # Les boîtes sont des CONTOURS, pas des aplats : on lit donc sur le bord
-    # supérieur de chacune, pas en son milieu. Elles ne se recouvrent pas —
-    # l'ambre en y=100, le vert en y=40 — donc chaque lecture est non ambiguë.
-    boites = [(0, 100.0, 40.0, 140.0, 80.0)]
+    # La boîte comptée est REMPLIE (un aplat vert, pas un contour) : on lit donc
+    # en son MILIEU, pas sur un bord. La boîte verte est réduite de 3 px par
+    # rapport à la détection, donc elle ne recouvre pas l'ambre en y=100.
+    boites = [(0, 100.0, 30.0, 140.0, 80.0)]
 
     sortie = dessiner(img, r, boites_comptees=boites)
 

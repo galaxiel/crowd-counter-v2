@@ -134,40 +134,26 @@ PLAFOND_ANALYSE = 1280
 #:
 #: La bande ne fait PAS gagner de temps de calcul (71 à 76 s quelle que soit la
 #: largeur) : le goulot est ailleurs. Ce n'est pas une optimisation de débit.
-BANDE_AVANT_PX = 200
-BANDE_APRES_PX = 100
+BANDE_AVANT_PX = 250
+BANDE_APRES_PX = 250
 
-#: Durée d'affichage de la boîte verte d'une personne qui vient d'être
-#: comptée, en frames TRAITÉES (pas affichées).
+#: Durée d'affichage maximale de la boîte verte d'une personne comptée, en
+#: frames TRAITÉES (pas affichées).
 #:
-#: 100 px de bande après la ligne à 0,69 px/frame mesuré sur la vidéo de
-#: référence : 145 frames, soit ~5 s de vidéo. C'est la durée pendant laquelle
-#: la personne reste dans la zone utile après son comptage. La borne est donc
-#: le TEMPS DE VISIBILITÉ, pas un clignotement : on veut voir la personne
-#: s'éloigner, pas la voir disparaître.
+#: La règle normale n'est PLUS une durée : c'est la vie du track. La boîte
+#: verte SUIT la personne tant que son track est suivi (250 px de bande après
+#: la ligne à 0,69 px/frame mesuré = 362 frames), et disparaît quand il sort
+#: de la bande. Cette constante n'est que le FILET : si une personne s'arrête
+#: dans la bande après la ligne, son track reste vivant — la boîte verte ne
+#: doit pas rester affichée indéfiniment.
 #:
-#: Passé ce délai, la boîte ne disparaît pas : elle entre en FONDU (voir
-#: `DUREE_FONDO_BOITE_COMPTEE_FRAMES`).
-DUREE_BOITE_COMPTEE_FRAMES = 145
+#: 400 frames ≈ 13 s : au-dessus du temps de traversée de la bande (362
+#: frames), donc le filet ne coupe jamais une boîte qui suit normalement.
+DUREE_BOITE_COMPTEE_FRAMES = 400
 
-#: Durée du FONDU, en frames traitées, qui prolonge la vie visible d'une boîte
-#: comptée APRÈS sa sortie de la bande, à opacité décroissante.
-#:
-#: 75 frames ≈ 2,5 s à 25 i/s. La vie totale d'une boîte est donc
-#: `DUREE_BOITE_COMPTEE_FRAMES + DUREE_FONDO_BOITE_COMPTEE_FRAMES` = 220 frames.
-#:
-#: **Pourquoi un fondu plutôt qu'une disparition sèche.** Sans lui, la boîte
-#: s'éteint exactement sur la bordure de la bande, alors que la personne est
-#: encore à l'écran : l'opérateur lit ça comme « le compteur ne voit plus
-#: personne », alors qu'il en a précisément fini de la suivre. Et une boîte
-#: figée à sa dernière position de franchissement maintenue en pleine
-#: opacité pendant plusieurs secondes dirait la même chose. Le fondu tient les
-#: deux : la boîte reste visible assez longtemps pour qu'on la suive des yeux,
-#: et son atténuation dit qu'elle s'éteint au lieu de s'être arrêtée.
-#:
-#: C'est une pure durée D'AFFICHAGE. La bande de détection n'est pas élargie,
-#: donc le tracker ne suit personne plus loin et le décompte est inchangé.
-DUREE_FONDO_BOITE_COMPTEE_FRAMES = 75
+#: La durée du fondu a été supprimée : la boîte verte SUIT la personne et
+#: disparaît quand son track sort de la bande. Ancienne valeur : 75 frames.
+# DUREE_FONDO_BOITE_COMPTEE_FRAMES = 0
 
 #: Facteur d'assombrissement appliqué HORS de la bande de détection, à
 #: l'affichage uniquement. L'image reste lisible : c'est un voile, pas un

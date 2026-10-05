@@ -466,73 +466,20 @@ def test_la_barre_de_statut_annonce_la_resolution_retenue(application, video_720
     assert "1280×720" in statut
 
 
-# -- Vitesse de présentation --------------------------------------------
+# -- Retrait du sélecteur de vitesse -------------------------------------
 
-def test_la_vitesse_de_presentation_est_sous_la_barre_de_boutons(application):
-    """La régression du réglage invisible : sous la barre, pas au fond de la colonne."""
+def test_le_selecteur_de_vitesse_a_ete_retire(application):
+    """L'opérateur veut la vitesse maximale, pas un ralenti.
+
+    Le sélecteur de vitesse de présentation a été retiré : il ne contrôlait
+    que la fréquence de rafraîchissement, pas la vitesse réelle (plafonnée par
+    le traitement), et son effet était contre-intuitif (0,25× semblait plus
+    rapide que ×4). L'analyse s'affiche désormais à vitesse max, sans réglage.
+    """
     f = FenetrePrincipale()
-    f.show()
-    application.processEvents()
-    assert f.choix_vitesse.y() > f.btn_video.y(), (
-        "la vitesse de présentation doit être SOUS la barre de boutons, "
-        "sinon elle passe inaperçue au fond d'une colonne de réglages"
-    )
-
-
-def test_la_vitesse_de_presentation_est_nommee(application):
-    """Un menu déroulant nu ne dit pas ce qu'il règle."""
-    f = FenetrePrincipale()
-    assert f.etiquette_vitesse.text() == "Vitesse de présentation"
-    # Le libellé est bien à l'écran, pas seulement dans le code.
-    assert not f.etiquette_vitesse.text().strip() == ""
-
-
-def test_la_vitesse_de_presentation_est_dans_le_meme_bloc_que_les_boutons(application):
-    """Le curseur doit être au même niveau visuel que la barre, pas plus haut."""
-    f = FenetrePrincipale()
-    f.show()
-    application.processEvents()
-    haut_boutons = f.btn_video.y()
-    haut_vitesse = f.choix_vitesse.y()
-    # Une ligne de QComboBox : la vitesse est SOUS, pas au-dessus ni dessous
-    # l'annexe. On tolère un écart d'une ligne de layout.
-    assert haut_vitesse >= haut_boutons
-
-
-def test_la_vitesse_de_presentation_a_son_explication(application):
-    """Le réglage le plus manipulé après le lancement doit être expliqué."""
-    aide = AIDE["vitesse_presentation"]
-    assert "Ce que ça fait" in aide
-    assert "Ce que ça change" in aide
-    assert "Valeur conseillée" in aide
-
-
-def test_l_explication_de_vitesse_dit_qu_elle_ne_change_pas_le_decompte(application):
-    """La confusion la plus coûteuse : ralentir l'affichage en croyant
-    ralentir le comptage, et jeter une analyse de plusieurs minutes."""
-    aide = AIDE["vitesse_presentation"]
-    assert "NE CHANGE PAS le décompte" in aide
-
-
-def test_l_explication_de_vitesse_est_affichee_sur_le_curseur(application):
-    """Une explication qui existe mais ne s'affiche pas ne sert à rien."""
-    f = FenetrePrincipale()
-    aide = AIDE["vitesse_presentation"]
-    assert f.choix_vitesse.toolTip() == aide
-    assert f.etiquette_vitesse.toolTip() == aide
-
-
-def test_les_choix_de_vitesse_sont_inchanges(application):
-    """Le contrat de la tâche : 0,25x à 4x plus « max », rien de plus, rien de moins."""
-    f = FenetrePrincipale()
-    choix = [f.choix_vitesse.itemText(i) for i in range(f.choix_vitesse.count())]
-    assert choix == ["0.25×", "0.5×", "1×", "2×", "4×", "max"]
-
-
-def test_deplacer_la_vitesse_ne_casse_aucun_test_de_cadence(application, video_720p):
-    """Le déplacement est purement visuel : les minuteries ne bougent pas."""
-    f = FenetrePrincipale()
-    f.charger_video(str(video_720p))
-    f.choix_vitesse.setCurrentText("0.25×")
+    assert not hasattr(f, "choix_vitesse"), "le sélecteur de vitesse doit avoir disparu"
+    assert not hasattr(f, "etiquette_vitesse")
+    assert "vitesse_presentation" not in AIDE
+    # Les deux minuteries restent à 0 : le traitement et l'affichage foncent.
     assert f._timer_traitement.interval() == 0
-    assert f._timer_affichage.interval() == 160
+    assert f._timer_affichage.interval() == 0

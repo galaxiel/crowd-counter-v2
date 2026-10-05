@@ -132,12 +132,6 @@ ORIENTATION_SANS_LIGNE = ORIENTATION_VERTICALE
 #: mesures faites sur la vidéo de référence (`D:/Bureau/manif_test.mp4`, 7399
 #: frames, medium.pt). Une valeur conseillée sans mesure derrière n'est
 #: qu'une opinion déguisée en réglage par défaut.
-#:
-#: Une seule entrée ne suit pas cette règle, et c'est délibéré :
-#: `vitesse_presentation` n'est pas un champ de `Config`, c'est le curseur que
-#: l'opérateur actionne le plus souvent APRÈS le lancement, et la confusion
-#: qu'il crée (« ralentir l'affichage ralentit le comptage ») coûte une analyse
-#: jetée. Son avertissement doit rester impossible à manquer en survol court.
 AIDE: dict[str, str] = {
     "modele": (
         "Modèle de détection (.pt).\n\n"
@@ -260,24 +254,9 @@ AIDE: dict[str, str] = {
         "Valeur conseillée : 1, aucun lissage. Mesuré : la marche de référence "
         "passe de 1 comptage (K=1) à 0 pour K=5, 10 et 20."
     ),
-    # Le seul réglage d'AIDE qui ne soit pas un champ de `Config` : la vitesse
-    # de présentation ne voyage pas dans un profil, elle est remise à zéro à
-    # chaque ouverture. Elle est ici pour une seule raison : ce curseur est
-    # celui que l'opérateur actionne le plus souvent APRÈS le lancement, et
-    # un réglage aussi fréquent sans explication est un réglage qu'on change
-    # au hasard — en croyant ralentir le comptage.
-    "vitesse_presentation": (
-            "Vitesse de présentation — à quel rythme l'analyse est affichée.\n\n"
-            "Ce que ça fait : ralentit ou accélère l'affichage pendant que le "
-            "comptage, lui, continue à la vitesse maximale de la machine. Les "
-            "images intermédiaires sont sautées, rien n'est recalculé.\n"
-            "Ce que ça change : UNIQUEMENT la fluidité de ce que tu vois. NE "
-            "CHANGE PAS le décompte : il est exactement le même à 0,25× qu'à 4×. "
-            "Ralentir sert à regarder un passage de près.\n"
-            "Valeur conseillée : « max », qui affiche chaque image dès qu'elle "
-            "est prête. 0,25× pour regarder de près, 1× pour le confort de "
-            "lecture, 4× ou « max » pour aller au bout d'une longue vidéo."
-    ),
+    # La vitesse de présentation a été retirée avec le sélecteur (voir
+    # `interface.app`) : l'analyse s'affiche à vitesse maximale, il n'y a
+    # plus de curseur à expliquer.
 }
 
 

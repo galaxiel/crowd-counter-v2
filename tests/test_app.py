@@ -39,7 +39,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 
-from compteur.types import Evenement, FrameResult  # noqa: E402
+from compteur.types import Evenement, FrameResult, Track  # noqa: E402
 from interface.app import AVERTISSEMENT_SENS, FenetrePrincipale  # noqa: E402
 from interface.overlay import dessiner  # noqa: E402
 
@@ -532,56 +532,28 @@ def test_fermer_la_fenetre_libere_la_video(application, fenetre, video_synthetiq
     assert not capture.isOpened()
 
 
-# -- Vitesse de présentation : ne touche jamais au traitement --------------
+# -- Vitesse de présentation : retirée, l'analyse va à vitesse maximale -----
 
 
-def test_vitesse_max_laisse_le_traitement_a_zero(application, fenetre, video_synthetique):
-    f = fenetre
-    f.charger_video(str(video_synthetique))
-    f.choix_vitesse.setCurrentText("max")
-    assert f._timer_traitement.interval() == 0
-    assert f._timer_affichage.interval() == 0
+def test_le_traitement_et_l_affichage_vont_a_vitesse_max(application, fenetre, video_synthetique):
+    """Le sélecteur de vitesse a été retiré : l'analyse fonce, toujours.
 
-
-def test_vitesse_lente_ne_ralentit_pas_le_traitement(
-    application, fenetre, video_synthetique
-):
-    """0,25x à 25 i/s = une image affichée toutes les 160 ms.
-
-    Le timer de TRAITEMENT, lui, reste à 0 ms : c'est le GPU qui fixe la
-    cadence, pas le curseur de vitesse. Un seul timer (celui du plan) aurait
-    ralenti les deux, donc le comptage lui-même.
+    Le réglage ne contrôlait que la fréquence de rafraîchissement, pas la
+    vitesse réelle (plafonnée par le traitement), et son effet était
+    contre-intuitif — 0,25× semblait plus rapide que ×4. Retiré, les deux
+    minuteries restent à 0 : le traitement ET l'affichage sont aussi rapides
+    que la machine le permet.
     """
     f = fenetre
     f.charger_video(str(video_synthetique))
-    f.choix_vitesse.setCurrentText("0.25×")
-    assert f._timer_affichage.interval() == 160
     assert f._timer_traitement.interval() == 0
-
-
-def test_vitesse_1x_affiche_a_la_cadence_de_la_video(
-    application, fenetre, video_synthetique
-):
-    f = fenetre
-    f.charger_video(str(video_synthetique))
-    f.choix_vitesse.setCurrentText("1×")
-    assert f._timer_affichage.interval() == 40  # 1000 / 25
-
-
-def test_vitesse_2x_accelere_l_affichage_sans_rien_casser(
-    application, fenetre, video_synthetique
-):
-    f = fenetre
-    f.charger_video(str(video_synthetique))
-    f.choix_vitesse.setCurrentText("2×")
-    assert f._timer_affichage.interval() == 20
-    assert f._timer_traitement.interval() == 0
+    assert f._timer_affichage.interval() == 0
 
 
 def test_affichage_ne_redessine_pas_la_meme_frame_deux_fois(
     application, fenetre, video_synthetique
 ):
-    """À 0,25x, l'affichage saute des frames traitées au lieu de les rejouer.
+    """L'affichage ne redessine pas la même frame deux fois.
 
     Le compteur affiché doit correspondre à l'image affichée : les deux sont
     mis à jour au même moment, sinon l'opérateur voit un chiffre qui avance
@@ -957,26 +929,28 @@ def test_il_ne_reste_plus_rien_a_exporter(application, fenetre):
 def test_la_liste_des_boites_comptees_est_bornee(application, fenetre):
     """La mémoire d'affichage ne peut pas grossir sans borne.
 
-    Les tracks sont lâchés au franchissement : rien ne viendrait purger cette
-    liste à leur place. Sans borne explicite, une analyse de dix mille passages
-    laisserait dix mille boîtes à l'écran — illisible, et la seule trace d'un
-    défaut de purge.
+    Les tracks sont lâchés à la sortie de la bande : rien ne viendrait purger
+    cette liste à leur place. Sans borne explicite, une analyse de dix mille
+    passages laisserait dix mille boîtes à l'écran — illisible, et la seule
+    trace d'un défaut de purge.
 
     On éprouve les DEUX bornes séparément : la durée fait disparaître une boîte
-    âgée, et le plafond en nombre résiste même quand la durée ne purge rien
-    (ici, tous les comptages sur la même frame).
+    âgée, et le plafond en nombre résiste même quand rien n'expire (ici, tous
+    les comptages sur la même frame).
     """
-    from compteur.config import (
-        DUREE_BOITE_COMPTEE_FRAMES,
-        DUREE_FONDO_BOITE_COMPTEE_FRAMES,
-    )
+    from compteur.config import DUREE_BOITE_COMPTEE_FRAMES
     from interface.app import TAILLE_MAX_BOITES_COMPTES
 
     f = fenetre
     img = np.zeros((240, 320, 3), dtype=np.uint8)
 
-    def frame(index, evenements):
-        return FrameResult(image=img, frame_index=index, evenements=evenements)
+    def frame(index, evenements, tracks=None):
+        return FrameResult(
+            image=img,
+            frame_index=index,
+            evenements=evenements,
+            tracks=tracks or [],
+        )
 
     def evenement(frame_index):
         return Evenement(
@@ -988,31 +962,83 @@ def test_la_liste_des_boites_comptees_est_bornee(application, fenetre):
             bbox=(90.0, 90.0, 110.0, 110.0),
         )
 
-    # Une boîte comptée à la frame 0 est encore là bien après le comptage…
-    f._boites_comptees_a_afficher(frame(0, [evenement(0)]))
-    # … et a disparu une fois son délai de visibilité ET son fondu dépassés.
+    def track_pour(i):
+        return Track(i, (100.0, 100.0), (90.0, 90.0, 110.0, 110.0), 5, True)
+
+    # Une boîte comptée à la frame 0 est encore là à la frame 1 (track suivi)…
+    f._boites_comptees_a_afficher(frame(0, [evenement(0)], [track_pour(0)]))
+    assert len(f._boites_comptees) == 1
+    # … et a disparu une fois son délai de visibilité dépassé, même si le
+    # track est encore suivi (une personne arrêtée dans la bande).
     assert f._boites_comptees_a_afficher(
-        frame(DUREE_BOITE_COMPTEE_FRAMES + DUREE_FONDO_BOITE_COMPTEE_FRAMES + 1, [])
+        frame(DUREE_BOITE_COMPTEE_FRAMES + 1, [], [track_pour(0)])
     ) == []
 
     # Le plafond en nombre tient même si rien n'expire : 300 comptages sur une
     # seule frame ne peuvent pas produire plus de 200 boîtes à l'écran.
     for i in range(300):
-        f._boites_comptees_a_afficher(frame(0, [evenement(i)]))
+        f._boites_comptees_a_afficher(
+            frame(0, [evenement(i)], [track_pour(i)])
+        )
     assert len(f._boites_comptees) <= TAILLE_MAX_BOITES_COMPTES
 
 
-def test_la_boite_comptee_sestompe_apres_la_bande_et_suit_le_glisser(
+def test_un_evenement_de_frame_sautee_devient_quand_meme_vert(
+    application, fenetre
+):
+    """Une frame sautée à l'affichage ne perd PAS sa boîte verte.
+
+    Quand la vitesse de présentation est lente, le traitement produit plusieurs
+    frames entre deux affichages ; seul le dernier `FrameResult` est montré.
+    L'événement d'une frame intermédiaire n'est donc JAMAIS dans
+    `resultat.evenements` (qui ne porte que la frame affichée) — mais le
+    compteur l'a bien enregistré dans son HISTORIQUE. Sans rattrapage, le
+    total monte sans que la boîte verte ne soit jamais peinte : le chiffre
+    dit « compté », l'écran ne montre rien.
+    """
+    f = fenetre
+    img = np.zeros((240, 320, 3), dtype=np.uint8)
+
+    # Le compteur a déjà compté quelqu'un à la frame 2 (historique complet).
+    compteur = FauxCompteur()
+    compteur.evenements.append(
+        Evenement(
+            frame=2,
+            timestamp_s=2 / 25.0,
+            x=100.0,
+            y=100.0,
+            track_id=7,
+            bbox=(90.0, 90.0, 110.0, 110.0),
+        )
+    )
+    f.compteur = compteur
+
+    # L'affichage saute la frame 2 : il présente la frame 5, SANS événement.
+    # Le track compté est encore suivi (dans la bande).
+    track = Track(7, (105.0, 100.0), (95.0, 90.0, 115.0, 110.0), 20, True)
+    resultat = FrameResult(image=img, frame_index=5, tracks=[track])
+    boites = f._boites_comptees_a_afficher(resultat)
+
+    assert len(boites) == 1, (
+        "l'événement de la frame sautée doit produire sa boîte verte"
+    )
+    # Et la boîte est à la position COURANTE du track (la personne avance),
+    # pas à la position figée du franchissement.
+    assert boites[0][1:5] == (95.0, 90.0, 115.0, 110.0)
+
+
+def test_la_boite_comptee_suit_la_personne_et_suit_le_glisser(
     application, fenetre
 ):
     """Les deux demandes de l'opérateur, en un seul geste vérifié.
 
-    **1. La boîte verte survit à la sortie de la bande, en s'estompant.** Elle
-    était pleine pendant toute la durée nominale (le temps de traverser les
-    100 px après la ligne) ; au-delà elle reste affichée mais son opacité
-    décroît jusqu'à zéro. Le défaut constaté était une disparition sèche
-    exactement sur la bordure — donc quelqu'un qui s'éteint, pas quelqu'un
-    qu'on abandonne.
+    **1. La boîte verte SUIT la personne comptée, puis disparaît à la sortie
+    de la bande.** Elle n'est pas figée sur la ligne : elle est peinte à la
+    position COURANTE du track, qui continue d'être suivi après le
+    franchissement. Quand la personne sort de la bande (le track disparaît de
+    `resultat.tracks`), la boîte disparaît avec elle — le geste exact que
+    l'opérateur décrit : détecté dans la bande, vert au franchissement, plus
+    de boîte à la sortie.
 
     **2. Le glisser-déposer déplace la ligne ET sa bande.** Un clic posé DANS
     la bande, une ligne existant, followed d'un mouvement : c'est un
@@ -1021,10 +1047,6 @@ def test_la_boite_comptee_sestompe_apres_la_bande_et_suit_le_glisser(
     main. Un clic HORS bande reste un tracé, et une analyse en cours rend le
     geste inopérant au lieu de le laisser tenter un déplacement refusé.
     """
-    from compteur.config import (
-        DUREE_BOITE_COMPTEE_FRAMES,
-        DUREE_FONDO_BOITE_COMPTEE_FRAMES,
-    )
     from interface.overlay import COULEUR_COMPTEE
 
     f = fenetre
@@ -1032,8 +1054,13 @@ def test_la_boite_comptee_sestompe_apres_la_bande_et_suit_le_glisser(
     img = np.zeros((480, 640, 3), dtype=np.uint8)
     f.video.definir_image(img)
 
-    def frame(index, evenements):
-        return FrameResult(image=img, frame_index=index, evenements=evenements)
+    def frame(index, evenements, tracks=None):
+        return FrameResult(
+            image=img,
+            frame_index=index,
+            evenements=evenements,
+            tracks=tracks or [],
+        )
 
     def evenement(frame_index):
         return Evenement(
@@ -1045,24 +1072,34 @@ def test_la_boite_comptee_sestompe_apres_la_bande_et_suit_le_glisser(
             bbox=(90.0, 90.0, 110.0, 110.0),
         )
 
-    # -- 1. Le fondu -------------------------------------------------------
-    f._boites_comptees = f._boites_comptees_a_afficher(frame(0, [evenement(0)]))
-    assert f._boites_comptees[0][5] == 1.0, "une boîte fraîche doit être opaque"
-
-    mi_fondu = f._boites_comptees_a_afficher(
-        frame(DUREE_BOITE_COMPTEE_FRAMES + DUREE_FONDO_BOITE_COMPTEE_FRAMES // 2, [])
+    # -- 1. La boîte SUIT la personne ---------------------------------------
+    # Le track compté à la frame 0 est encore suivi à la frame 10, déplacé de
+    # 10 px : la boîte verte doit être peinte à sa position COURANTE, pas à
+    # celle du franchissement.
+    track = Track(0, (110.0, 100.0), (100.0, 90.0, 120.0, 110.0), 15, True)
+    f._boites_comptees_a_afficher(frame(0, [evenement(0)], [track]))
+    suivi = f._boites_comptees_a_afficher(frame(10, [], [track]))
+    assert len(suivi) == 1, "la boîte doit survivre tant que le track est suivi"
+    assert suivi[0][1:5] == (100.0, 90.0, 120.0, 110.0), (
+        "la boîte doit être à la position COURANTE du track, pas figée"
     )
-    assert len(mi_fondu) == 1, "la boîte doit SURVIVIR à la sortie de la bande"
-    assert 0.0 < mi_fondu[0][5] < 1.0, "elle doit être entre-deux, passez ni pleine ni absente"
 
-    # Le fondu est RÉELLEMENT peint : le vert doit se mélanger au fond noir.
+    # Quand le track sort de la bande (plus suivi), la boîte disparaît.
+    f._boites_comptees_a_afficher(frame(20, []))
+    assert f._boites_comptees_a_afficher(frame(30, [])) == [], (
+        "le track mort (sorti de la bande) doit emporter sa boîte"
+    )
+
+    # La boîte est RÉELLEMENT peinte, remplie, à sa position courante. On lit
+    # au CENTRE : la boîte est réduite de 3 px de chaque côté.
     sortie = dessiner(
-        img, frame(0, []), boites_comptees=[(0, 90.0, 90.0, 110.0, 110.0, 0.4)]
+        img,
+        frame(0, []),
+        boites_comptees=[(0, 90.0, 90.0, 110.0, 110.0)],
     )
-    couleur = sortie[90, 100].astype(int)
-    attendu = np.array(COULEUR_COMPTEE, dtype=float) * 0.4
-    assert np.allclose(couleur, attendu, atol=2), (
-        f"la boîte en fondu devrait être mélangée au fond, lu {tuple(couleur)}"
+    couleur = sortie[100, 100].astype(int)
+    assert np.allclose(couleur, COULEUR_COMPTEE, atol=2), (
+        f"la boîte comptée devrait être peinte en vert, lu {tuple(couleur)}"
     )
 
     # -- 2. Le glisser-déposer ---------------------------------------------

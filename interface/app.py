@@ -36,7 +36,6 @@ import cv2
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -54,7 +53,6 @@ from compteur.config import (
     BANDE_APRES_PX,
     BANDE_AVANT_PX,
     DUREE_BOITE_COMPTEE_FRAMES,
-    DUREE_FONDO_BOITE_COMPTEE_FRAMES,
     MODE_MANUEL,
     Config,
     mode_peripherique,
@@ -69,7 +67,6 @@ from compteur.ligne import Ligne
 from compteur.tracker import Tracker
 from interface.overlay import dessiner
 from interface.panneau_reglages import (
-    AIDE,
     LIBELLES_SENS,
     PanneauReglages,
     orientation_par_defaut_sens,
@@ -79,12 +76,6 @@ from interface.style import appliquer_style  # noqa: F401  (ré-export pour main
 from interface.widgets_video import WidgetVideo
 
 log = logging.getLogger(__name__)
-
-#: Vitesses de présentation proposées. La dernière, « max », ne limite rien :
-#: on affiche chaque frame traitée dès qu'elle est prête.
-VITESSE_MAX = "max"
-VITESSE_PAR_DEFAUT = "max"
-VITESSE_LENTE = "0.25×"
 
 #: Cadence de référence quand la vidéo n'annonce pas la sienne (codec exotique,
 #: conteneur mal écrit). 25 i/s est le standard des caméras de surveillance.
@@ -182,15 +173,23 @@ class FenetrePrincipale(QMainWindow):
         self._apercu_point: tuple[int, int] | None = None
         #: Boîtes VERTES des personnes comptées, encore à l'écran.
         #:
-        #: Ce n'est PAS du tracking : les tracks sont lâchés au franchissement
-        #: (`_purger_franchis`), donc il n'y a rien à suivre. C'est une simple
-        #: liste de tuples `(frame_comptage, x1, y1, x2, y2, opacite)` que
-        #: l'overlay dessine sans les mettre à jour. Bornée en durée ET en
-        #: nombre — voir `DUREE_BOITE_COMPTEE_FRAMES`,
-        #: `DUREE_FONDO_BOITE_COMPTEE_FRAMES` et `TAILLE_MAX_BOITES_COMPTES`.
-        self._boites_comptees: list[
-            tuple[int, float, float, float, float, float]
-        ] = []
+        #: Ce n'est PAS du tracking figé : le track continue d'être suivi après
+        #: le franchissement (`_purger_franchis` ne touche pas au tracker), donc
+        #: on stocke le `track_id` et on cherche sa position COURANTE dans le
+        #: résultat — la boîte verte suit la tête au lieu de rester collée à la
+        #: ligne. Quand la personne sort de la bande, elle n'est plus détectée,
+        #: le track meurt et la boîte disparaît avec lui.
+        #:
+        #: Liste de tuples `(frame_comptage, track_id)`, bornée en nombre —
+        #: voir `TAILLE_MAX_BOITES_COMPTES`.
+        self._boites_comptees: list[tuple[int, int]] = []
+        #: Nombre d'événements du compteur déjà transformés en boîtes vertes.
+        #: L'affichage peut sauter des frames (vitesse lente) : sans ce
+        #: marqueur, on relirait sans cesse les mêmes événements et on
+        #: re-créerait des boîtes déjà vues. Il progresse d'un cran par
+        #: événement consommé, et repart de zéro quand l'historique est vidé
+        #: (nouvelle analyse).
+        self._dernier_evenement_affiche = 0
         #: Position de la ligne AU DÉBUT du glissement en cours, ou None.
         #: Le décalage émis par le widget est cumulé depuis l'ancrage : il faut
         #: donc repartir de la position de départ à chaque mouvement, sinon la
@@ -355,41 +354,14 @@ class FenetrePrincipale(QMainWindow):
             barre.addWidget(b)
         colonne.addLayout(barre)
 
-        # La vitesse de présentation vit JUSTE SOUS la barre de boutons, pas
-        # en bas de la colonne de réglages. C'est le seul curseur que
-        # l'opérateur actionne APRÈS avoir lancé — et c'est celui qu'il
-        # actionne le plus souvent : au ralenti pour vérifier un passage
-        # douteux, en accéléré pour rattraper la fin. En bas d'une colonne de
-        # 2300 px de réglages, il passait inapercu.
-        #
-        # Il porte un LIBELLÉ parce qu'un menu déroulant nu ne dit pas ce qu'il
-        # règle. Et son explication dit explicitement qu'il ne touche PAS au
-        # décompte : c'est la confusion la plus coûteuse possible ici, puisque
-        # ralentir l'affichage en croyant ralentir le comptage conduit à
-        # jeter une analyse de plusieurs minutes.
-        self.etiquette_vitesse = QLabel("Vitesse de présentation")
-        self.etiquette_vitesse.setObjectName("libelle_reglage")
-        ligne_vitesse = QHBoxLayout()
-        ligne_vitesse.addWidget(self.etiquette_vitesse)
-        self.choix_vitesse = QComboBox()
-        self.choix_vitesse.addItems(
-            ["0.25×", "0.5×", "1×", "2×", "4×", VITESSE_MAX]
-        )
-        self.choix_vitesse.setCurrentText(VITESSE_PAR_DEFAUT)
-        # L'explication vit dans `AIDE`, avec les autres réglages : une seule
-        # source de vérité, et des tests qui la couvrent sans duplication.
-        aide_vitesse = AIDE["vitesse_presentation"]
-        self.etiquette_vitesse.setToolTip(aide_vitesse)
-        self.choix_vitesse.setToolTip(aide_vitesse)
-        ligne_vitesse.addWidget(self.choix_vitesse, stretch=1)
-        colonne.addLayout(ligne_vitesse)
-
         # Traitement : intervalle 0, donc « aussi vite que possible ». C'est
-        # le GPU qui fixe la cadence de cette minuterie, jamais le curseur de
-        # vitesse de présentation.
+        # le GPU qui fixe la cadence de cette minuterie, jamais un réglage
+        # utilisateur : l'analyse va aussi vite que la machine le permet.
         self._timer_traitement = QTimer(self)
         self._timer_traitement.setInterval(0)
-        # Affichage : intervalle réglé par `_appliquer_vitesse`.
+        # Affichage : même cadence. Le sélecteur de vitesse a été retiré —
+        # l'opérateur veut le résultat vite, pas un ralenti qui n'influence
+        # d'ailleurs pas le décompte (deux minuteries, le traitement reste à 0).
         self._timer_affichage = QTimer(self)
         self._timer_affichage.setInterval(0)
 
@@ -403,7 +375,6 @@ class FenetrePrincipale(QMainWindow):
         self.video.deplacement.connect(self._on_deplacement_video)
         self.video.deplacement_fini.connect(self._on_deplacement_fini)
         self.panneau.config_modifiee.connect(self._sur_config)
-        self.choix_vitesse.currentTextChanged.connect(self._appliquer_vitesse)
         self._timer_traitement.timeout.connect(self._tick)
         self._timer_affichage.timeout.connect(self._afficher)
 
@@ -526,7 +497,6 @@ class FenetrePrincipale(QMainWindow):
         self.video_finiment = p
         self._reset_analyse()
         self._afficher_premiere_frame()
-        self._appliquer_vitesse()
 
         nb_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         fps = self._fps()
@@ -593,6 +563,9 @@ class FenetrePrincipale(QMainWindow):
         # précédente : les laisser afficher sur la nouvelle donnerait à
         # l'opérateur des personnes qui n'existent pas dans cette scène.
         self._boites_comptees.clear()
+        # Le marqueur d'événements consommés repart avec : l'historique du
+        # compteur est celui de la vidéo précédente, et il sera vidé avec elle.
+        self._dernier_evenement_affiche = 0
         # Nouvelle vidéo : l'ancienne ligne était verrouillée pour l'analyse
         # qui vient de s'arrêter. Sans ce déverrouillage, l'opérateur ne
         # pourrait plus la déplacer, et le bouton « Tracer la ligne » échouerait
@@ -970,6 +943,7 @@ class FenetrePrincipale(QMainWindow):
         self._index_affiche = -1
         self._flash = 0
         self._boites_comptees.clear()
+        self._dernier_evenement_affiche = 0
         # « Une fois par analyse » : le compteur repart de zéro ici, donc le
         # rappel doit pouvoir se redéployer. La réouverture de session après
         # une pause NE le réarme pas : sans cela, chaque reprise en pause le
@@ -1143,7 +1117,10 @@ class FenetrePrincipale(QMainWindow):
         if self._flash > 0:
             self._flash -= 1
 
-        self._boites_comptees = self._boites_comptees_a_afficher(resultat)
+        # La méthode met à jour `self._boites_comptees` (état interne) ET
+        # retourne les positions courantes à dessiner. L'état interne reste
+        # donc intact ; c'est le retour qui part dans l'overlay.
+        boites = self._boites_comptees_a_afficher(resultat)
         self.maj_compteurs(resultat.total, resultat.presents, self.frames)
         self.video.definir_image(
             dessiner(
@@ -1152,117 +1129,87 @@ class FenetrePrincipale(QMainWindow):
                 self.ligne,
                 afficher_ids=False,
                 flash=flash,
-                boites_comptees=self._boites_comptees,
+                boites_comptees=boites,
             )
         )
 
     def _boites_comptees_a_afficher(
         self, resultat
-    ) -> list[tuple[int, float, float, float, float, float]]:
-        """Les boîtes vertes encore visibles à cette frame, les plus récentes en
-        tête.
+    ) -> list[tuple[int, float, float, float, float]]:
+        """Met à jour l'état interne et retourne les boîtes vertes à dessiner.
 
-        **Deux bornes, et chacune rattrape la défaillance de l'autre.**
+        **La boîte verte SUIT la personne, elle ne reste pas sur la ligne.**
+        L'événement de comptage porte la position du franchissement ; mais le
+        track, lui, continue d'être suivi tant que la personne reste dans la
+        bande de détection (`_purger_franchis` ne touche pas au tracker). On
+        stocke donc le `track_id`, pas une boîte figée, et on cherche sa
+        position COURANTE dans `resultat.tracks` à chaque frame : la boîte
+        verte colle à la tête qui avance.
 
-        - **La durée** (`DUREE_BOITE_COMPTEE_FRAMES`) décide de la vie pleine
-          d'une boîte : 145 frames, soit le temps que la personne met à traverser
-          les 100 px de bande situés après la ligne. Passé ce délai elle n'est
-          plus dans la zone, mais elle n'est PAS effacée : elle entre en fondu
-          sur `DUREE_FONDO_BOITE_COMPTEE_FRAMES` frames supplémentaires, ce qui
-          répond au défaut constaté — une boîte verte qui s'éteint pile sur la
-          bordure de la bande alors que la personne est encore visible à
-          l'écran. Le 6e élément de chaque tuple est cette opacité.
-        - **Le nombre** (`TAILLE_MAX_BOITES_COMPTES`) est le filet : si la règle
-          de durée ne purgeait pas — `frame_index` figé, compteur de test qui ne
-          progresse pas — la liste ne pourrait pas croître sans fin.
+        **Quand disparaît-elle ?** Quand la personne sort de la bande après la
+        ligne, elle n'est plus détectée : le tracker la lâche après
+        `survie_max` frames sans détection, donc elle disparaît de
+        `resultat.tracks` et la boîte avec elle. C'est exactement le geste que
+        l'opérateur décrit — détecté dans la bande, vert au franchissement,
+        plus de boîte à la sortie.
 
-        **Pourquoi les frames TRAITÉES et non affichées.** À 0,25x, l'opérateur
-        voit 7 images par seconde mais le moteur en traite 25. Une durée
-        exprimée en frames affichées ferait disparaître la boîte en 7/25 du
-        temps voulu — un clignotement à l'œil, précisément ce que la couleur
-        verte doit éviter. En frames traitées, la boîte reste visible le temps
-        réel de la vidéo, quelle que soit la vitesse de présentation.
-
-        **`frame_index` avance de 1 par frame traitée**, donc purger
-        ici — sur la frame affichée — laisse au pire quelques frames de retard
-        sur une frame dont le traitement a été plus lent que l'affichage. Sans
-        importance : c'est une impureté visuelle de quelques pixels, jamais une
-        erreur de décompte.
-
-        On filtre par l'index de frame de chaque boîte, pas en purgeant la
-        liste sur place : la liste retournée est celle que l'overlay dessine,
-        et une liste mutée en place pendant que l'overlay la parcourt serait
-        une course. Le tri par `reverse` donne les plus récentes d'abord, donc
-        un dépassement de `TAILLE_MAX_BOITES_COMPTES` sacrifie les plus
-        anciennes — celles que l'opérateur a déjà eu le temps de voir.
+        Deux bornes, chacune rattrape la défaillance de l'autre :
+        - **La vie du track** est la règle normale : boîte tant que la personne
+          est suivie. C'est elle qui fait suivre la boîte ET qui la fait
+          disparaître à la sortie de bande.
+        - **La durée** (`DUREE_BOITE_COMPTEE_FRAMES`) est le filet : si une
+          personne s'arrête dans la bande après la ligne, son track reste
+          vivant — la boîte verte ne doit pas rester affichée indéfiniment.
+        - **Le nombre** (`TAILLE_MAX_BOITES_COMPTES`) est le filet absolu : si
+          rien ne purge, la liste ne peut pas croître sans fin.
         """
-        # On accumule dans une liste LOCALE, et la borne est appliquée AVANT
-        # d'écrire dans `self._boites_comptees`. Accumuler directement dans
-        # l'attribut ferait dépendre la mémoire de l'appelant : il suffirait
-        # d'appeler cette méthode sans réassigner son résultat pour que la
-        # liste grossisse sans fin. La borne est donc une propriété de la
-        # méthode, pas une promesse faite à celui qui l'appelle.
-        # `self._boites_comptees` porte DÉJÀ une opacité (calculée à la frame
-        # précédente) : on n'en garde que les cinq premières composantes, sans
-        # quoi l'opacité d'il y a une frame se ferait empiler sur la nouvelle à
-        # chaque image et la liste grossirait d'un élément par frame.
-        accumulees = [boite[:5] for boite in self._boites_comptees]
-        for ev in getattr(resultat, "evenements", None) or []:
-            if ev.bbox is not None:
-                accumulees.append((ev.frame, *ev.bbox))
+        suivis = {t.track_id: t for t in getattr(resultat, "tracks", None) or []}
 
-        # La borne de durée est la règle normale. `frame_index` avance de 1 par
-        # frame traitée : une boîte vit DUREE_BOITE_COMPTEE_FRAMES frames en
-        # pleine opacité, puis DUREE_FONDO_BOITE_COMPTEE_FRAMES frames en fondu
-        # avant de s'éteindre.
-        frame = resultat.frame_index
-        duree_totale = DUREE_BOITE_COMPTEE_FRAMES + DUREE_FONDO_BOITE_COMPTEE_FRAMES
-        vivantes = []
-        for boite in accumulees:
-            age = frame - boite[0]
-            if age > duree_totale:
-                continue
-            # Opacité pleine pendant la durée nominale, puis décroissante
-            # linéairement jusqu'à zéro. Une boîte comptée est peinte à SA
-            # position de franchissement (l'overlay ne la suit pas) : le fondu
-            # est donc ce qui dit à l'opérateur « elle s'éteint » plutôt que
-            # « le compteur ne suit plus personne ».
-            if age <= DUREE_BOITE_COMPTEE_FRAMES:
-                alpha = 1.0
-            else:
-                alpha = 1.0 - (age - DUREE_BOITE_COMPTEE_FRAMES) / (
-                    DUREE_FONDO_BOITE_COMPTEE_FRAMES
-                )
-                alpha = min(1.0, max(0.0, alpha))
-            vivantes.append((*boite, alpha))
+        # Rattraper les événements non encore transformés en boîte verte.
+        # L'affichage peut sauter des frames (vitesse lente) : un événement
+        # produit sur une frame NON affichée ne serait jamais vu si on ne
+        # lisait que `resultat.evenements`, qui ne porte que la dernière frame
+        # traitée. L'historique du compteur, lui, garde TOUT — on en consomme
+        # un cran de plus à chaque affichage.
+        if self.compteur is not None:
+            historique = getattr(self.compteur, "evenements", None) or []
+            if len(historique) < self._dernier_evenement_affiche:
+                # Nouvelle analyse : l'historique a été vidé, on repart de zéro
+                # au lieu de re-créer des boîtes déjà vues.
+                self._dernier_evenement_affiche = 0
+            for ev in historique[self._dernier_evenement_affiche :]:
+                if ev.track_id is not None:
+                    self._boites_comptees.append((ev.frame, ev.track_id))
+            self._dernier_evenement_affiche = len(historique)
+        else:
+            # Pas de compteur (test, ou fenêtre construite seule) : on retombe
+            # sur les événements de la frame affichée.
+            for ev in getattr(resultat, "evenements", None) or []:
+                if ev.track_id is not None:
+                    self._boites_comptees.append((ev.frame, ev.track_id))
+
+        # On filtre par la vie du track, pas en purgeant sur place : la liste
+        # retournée est celle que l'overlay dessine, et une liste mutée pendant
+        # que l'overlay la parcourt serait une course.
+        vivantes: list[tuple[int, int]] = []
+        for frame_comptage, track_id in self._boites_comptees:
+            if track_id not in suivis:
+                continue  # la personne a quitté la bande : le track est mort
+            age = resultat.frame_index - frame_comptage
+            if age > DUREE_BOITE_COMPTEE_FRAMES:
+                continue  # filet de durée : personne arrêtée dans la bande
+            vivantes.append((frame_comptage, track_id))
+
         # La plus récente d'abord : un dépassement du plafond sacrifie alors les
         # plus anciennes, celles que l'opérateur a déjà eu le temps de voir.
         vivantes.sort(key=lambda boite: boite[0], reverse=True)
-        return vivantes[:TAILLE_MAX_BOITES_COMPTES]
+        self._boites_comptees = vivantes[:TAILLE_MAX_BOITES_COMPTES]
 
-    def _appliquer_vitesse(self, _texte: str | None = None) -> None:
-        """Règle la cadence d'AFFICHAGE. Ne touche jamais au traitement.
-
-        L'intervalle est l'écart entre deux images présentées : à 0,25x sur une
-        vidéo à 25 i/s, l'opérateur voit une image toutes les 160 ms. Les
-        frames traitées entre-temps ne sont pas mises en file d'attente — on
-        saute simplement les images intermédiaires, comme un lecteur vidéo en
-        lecture lente. Le décompte, lui, a avancé de 4 à chaque image affichée.
-        """
-        self._timer_affichage.setInterval(self._intervalle_affichage())
-
-    def _intervalle_affichage(self) -> int:
-        texte = self.choix_vitesse.currentText()
-        if texte == VITESSE_MAX:
-            return 0
-        try:
-            multiplicateur = float(texte.replace("×", "").replace("x", ""))
-        except ValueError:
-            log.warning("vitesse illisible : %r", texte)
-            return 0
-        if multiplicateur <= 0:
-            return 0
-        return max(0, int(round(1000.0 / (self._fps() * multiplicateur))))
+        # Les positions COURANTES, à la frame affichée.
+        return [
+            (frame, *suivis[track_id].bbox)
+            for frame, track_id in self._boites_comptees
+        ]
 
     # -- Compteurs et bilan ----------------------------------------------
 

@@ -348,8 +348,10 @@ shown is only valid for the portion you actually checked: it is a
 
 ### Reading the green boxes
 
-When a person is counted, their box turns **green** for a few seconds, then
-fades out as they leave the band on the far side of the line.
+When a person is counted, their box turns **green** andis **filled**, hiding
+the counted head. The green box **follows the person** as they walk away,
+and disappears the moment they leave the detection band on the far side of the
+line — a clean exit, no lingering frame.
 
 This is not decoration — **it is the only way to see a mistake without ground
 truth.** Nobody can recount a demonstration by hand, and the counter will never
@@ -389,9 +391,9 @@ These are not "not yet implemented" — they were considered and ruled out:
 
 ### The detection band
 
-The model only looks inside a band **200 px wide before the line and 100 px
-after it** — 300 px in total, deliberately lopsided. Everything outside it is
-dimmed on screen and never reaches the detector.
+The model only looks inside a band **250 px wide on each side of the line** —
+500 px in total, symmetrical. Everything outside it is dimmed on screen and
+never reaches the detector.
 
 This is the core design decision, and it cuts both ways:
 
@@ -403,12 +405,12 @@ This is the core design decision, and it cuts both ways:
   operator immediately where the counting happens, instead of boxes appearing
   and vanishing with no visible reason.
 
-**Why the band is not centred.** The tracker needs room *before* the line: an
-identity is built over several frames, from several images, and that is what
-makes the crossing reliable. After the line the count is already made — a
-crossed person can never be counted again — so the 100 px that only serve to
-show them walking away are enough. A centred 200 px band spent half of its
-width on a region that cannot change the result.
+The band used to be lopsided (200 px before the line, 100 px after); the
+operator chose to make it symmetrical at 250 px so the counting zone is easier
+to see. The tracker still needs room *before* the line — an identity is built
+over several frames, and that is what makes the crossing reliable — but after
+the crossing the person keeps being followed for display: the green box
+follows them until they leave the band, then disappears.
 
 Measured on the reference video, band widths from 200 px to 600 px all produce
 a higher count than analysing the whole frame; wider does not help further.

@@ -99,12 +99,11 @@ class Ligne:
         # attributs de la ligne, elle se déplace donc AVEC elle et ils ne
         # peuvent pas en être détachés.
         #
-        # La bande est DISSYMÉTRIQUE : `bande_avant_px` (côté de DÉPART,
-        # coordonnée positive sur la normale — voir `point_du_cote`) est plus
-        # large que `bande_apres_px` (côté d'arrivée). Le tracker a besoin
-        # d'espace pour construire une identité AVANT le franchissement ; après,
-        # le compte est fait et 100 px suffisent à voir la personne passer.
-        #
+        # La bande est SYMÉTRIQUE : `bande_avant_px` (côté de DÉPART,
+        # coordonnée positive sur la normale — voir `point_du_cote`) et
+        # `bande_apres_px` (côté d'arrivée) valent la même chose (250/250 px en
+        # production). L'opérateur a demandé la symétrie ; le moteur n'a pas
+        # besoin de savoir que les deux côtés étaient un jour différents.
         # `None` des deux côtés signifie « pas de bande » : le modèle voit
         # l'image entière. C'est le seul cas qui désactive le rognage — un
         # `None` d'un seul côté serait une bande d'un seul côté, ce qui n'a pas
@@ -194,9 +193,9 @@ class Ligne:
         il reçoit un rectangle. Cette séparation est vérifiée par un test
         d'isolation.
 
-        **La bande est DISSYMÉTRIQUE.** Elle s'étend de `bande_avant_px` sur le
+        **La bande est SYMÉTRIQUE.** Elle s'étend de `bande_avant_px` sur le
         côté de DÉPART (coordonnée positive sur la normale) à `bande_apres_px`
-        sur le côté d'ARRIVÉE — 200 / 100 px en production, donc 300 px au
+        sur le côté d'ARRIVÉE — 250 / 250 px en production, donc 500 px au
         total et non 200.
 
         **Quel côté est « avant », et pourquoi c'est le côté de départ.** Le
@@ -206,15 +205,14 @@ class Ligne:
         tracker a besoin d'espace pour CONSTUIRE une identité fiable sur
         plusieurs frames. Après le franchissement, le compte est fait et cette
         personne ne peut plus jamais compter (`a_traverse` exige un côté de
-        départ strictement positif) : il ne reste qu'à la voir s'éloigner, ce
-        que 100 px suffisent à montrer.
+        départ strictement positif) : il ne reste qu'à la voir s'éloigner.
 
         **L'implémentation est donc entièrement en coordonnées projetées.** On
         décale chaque extrémité du segment de `+avant` et de `-apres` le long de
         la NORMALE — pas « vers la gauche » / « vers la droite ». Le signe des
-        deux décalages est fixe, et c'est ce qui rend la bande dissymétrique
-        dans le bon sens quel que soit le `sens` : un décalage « vers -n »
-        donnerait une bande inversée, donc 100 px avant et 200 px après pour
+        deux décalages est fixe, et c'est ce qui place la bande du bon côté
+        quel que soit le `sens` : un décalage « vers -n » donnerait une bande
+        inversée, donc 250 px avant et 250 px après échangés pour
         `sens=-1`, exactement à l'opposé de ce qu'on veut.
 
         Elle est orientée par la NORMALE, donc elle suit une ligne diagonale
