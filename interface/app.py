@@ -54,6 +54,7 @@ from compteur.config import (
     BANDE_APRES_PX,
     BANDE_AVANT_PX,
     DUREE_BOITE_COMPTEE_FRAMES,
+    DUREE_FONDO_BOITE_COMPTEE_FRAMES,
     MODE_MANUEL,
     Config,
     mode_peripherique,
@@ -183,10 +184,18 @@ class FenetrePrincipale(QMainWindow):
         #:
         #: Ce n'est PAS du tracking : les tracks sont lâchés au franchissement
         #: (`_purger_franchis`), donc il n'y a rien à suivre. C'est une simple
-        #: liste de tuples `(frame_comptage, x1, y1, x2, y2)` que l'overlay
-        #: dessine sans la mettre à jour. Bornée en durée ET en nombre — voir
-        #: `DUREE_BOITE_COMPTEE_FRAMES` et `TAILLE_MAX_BOITES_COMPTES`.
-        self._boites_comptees: list[tuple[int, float, float, float, float]] = []
+        #: liste de tuples `(frame_comptage, x1, y1, x2, y2, opacite)` que
+        #: l'overlay dessine sans les mettre à jour. Bornée en durée ET en
+        #: nombre — voir `DUREE_BOITE_COMPTEE_FRAMES`,
+        #: `DUREE_FONDO_BOITE_COMPTEE_FRAMES` et `TAILLE_MAX_BOITES_COMPTES`.
+        self._boites_comptees: list[
+            tuple[int, float, float, float, float, float]
+        ] = []
+        #: Position de la ligne AU DÉBUT du glissement en cours, ou None.
+        #: Le décalage émis par le widget est cumulé depuis l'ancrage : il faut
+        #: donc repartir de la position de départ à chaque mouvement, sinon la
+        #: ligne dériverait au lieu de suivre le curseur.
+        self._ligne_avant_glissement: tuple | None = None
 
         self._construire()
         self._connecter()
@@ -391,6 +400,8 @@ class FenetrePrincipale(QMainWindow):
         self.btn_pause.clicked.connect(self._basculer_pause)
         self.btn_stop.clicked.connect(self.arreter)
         self.video.clic.connect(self._on_clic_video)
+        self.video.deplacement.connect(self._on_deplacement_video)
+        self.video.deplacement_fini.connect(self._on_deplacement_fini)
         self.panneau.config_modifiee.connect(self._sur_config)
         self.choix_vitesse.currentTextChanged.connect(self._appliquer_vitesse)
         self._timer_traitement.timeout.connect(self._tick)
@@ -588,6 +599,7 @@ class FenetrePrincipale(QMainWindow):
         # silencieusement.
         if self.ligne is not None:
             self.ligne.deverrouiller()
+        self.video.definir_zone_deplacement(None)
         # Le récapitulatif concernait l'analyse précédente : il n'a plus de
         # rapport avec cette vidéo-ci et disparaît avec elle.
         self.recap.effacer()
@@ -661,6 +673,64 @@ class FenetrePrincipale(QMainWindow):
         self._trace_arme = False
         self.definir_ligne(*self._points_ligne)
 
+    def _zone_deplacement(self) -> "tuple[int, int, int, int] | None":
+        """Rectangle de la bande, en pixels image, si le glissement a lieu.
+
+        `None` — donc pas de zone déplaçable — pendant une analyse : la ligne
+        est verrouillée, `Ligne.deplacer` refuserait le déplacement, et le
+        glisser doit être INOPÉRANT, pas planté. `None` aussi sans ligne.
+        """
+        if self.ligne is None or self._en_analyse or self.ligne.verrouillee:
+            return None
+        # Les dimensions sont celles de l'image AFFICHÉE, pas d'une lecture
+        # vidéo : c'est elle que l'opérateur clique, donc elle seule donne un
+        # rectangle dans lequel le clic tombera vraiment.
+        dimensions = self.video.dimensions_image()
+        if dimensions is None:
+            return None
+        largeur, hauteur = dimensions
+        return self.ligne.rect_bande_detection(largeur, hauteur)
+
+    def _rafraichir_zone_deplacement(self) -> None:
+        """Redonne au widget la zone déplaçable courante.
+
+        Appelée après chaque déplacement et après chaque changement de ligne :
+        la zone est DÉRIVÉE de la ligne, elle doit donc suivre le déplacement
+        au lieu de rester figée sur la bande d'origine.
+        """
+        self.video.definir_zone_deplacement(self._zone_deplacement())
+
+    def _on_deplacement_video(self, dx: int, dy: int) -> None:
+        """Un glissement : la ligne ET sa bande bougent de (dx, dy) pixels.
+
+        Le décalage est appliqué à `p1` et `p2` PAR LA MÊME valeur : la bande
+        n'est pas une coordonnée stockée mais une grandeur dérivée
+        (`Ligne.rect_bande_detection`), donc elle suit la ligne sans qu'aucun
+        second état puisse diverger. C'est aussi pourquoi on n'arme pas de
+        copie de bande ici : il n'y en a pas.
+        """
+        if self.ligne is None or self._en_analyse or self.ligne.verrouillee:
+            return
+        if self._ligne_avant_glissement is None:
+            self._ligne_avant_glissement = (self.ligne.p1, self.ligne.p2)
+        (ax, ay), (bx, by) = self._ligne_avant_glissement
+        self.ligne.deplacer((ax + dx, ay + dy), (bx + dx, by + dy))
+        self.config.ligne = (
+            self.ligne.p1[0],
+            self.ligne.p1[1],
+            self.ligne.p2[0],
+            self.ligne.p2[1],
+        )
+        self.panneau.definir_ligne(self.config.ligne)
+        self._rafraichir_affichage()
+        self._rafraichir_zone_deplacement()
+
+    def _on_deplacement_fini(self) -> None:
+        """Fin du glissement : l'ancrage est oublié, la zone est rafraîchie."""
+        self._ligne_avant_glissement = None
+        self._maj_boutons()
+        self._rafraichir_zone_deplacement()
+
     def definir_ligne(self, p1, p2) -> bool:
         """Fixe la ligne de comptage à partir de deux points image.
 
@@ -697,6 +767,9 @@ class FenetrePrincipale(QMainWindow):
         self.panneau.definir_ligne(self.config.ligne)
         self._rafraichir_affichage()
         self._maj_boutons()
+        # La bande devient immédiatement déplaçable : l'opérateur vient de la
+        # poser et veut souvent l'ajuster d'un cheveu avant de lancer.
+        self._rafraichir_zone_deplacement()
         # Le sens compté est écrit EN CLAIR dans la barre de statut, et pas
         # seulement dessiné par la flèche verte. L'opérateur voit ainsi, avant
         # de lancer, dans quel sens la vidéo va être comptée — c'était
@@ -883,6 +956,11 @@ class FenetrePrincipale(QMainWindow):
         # l'opérateur verrait sa colonne glisser sous ses yeux sans pouvoir croire
         # le chiffre. Le verrou est levé par `arreter()` et `_reset_analyse`.
         self.ligne.verrouiller()
+        # La zone déplaçable est RETIRÉE, pas seulement ignorée : le clic dans
+        # la bande redevient inerte au lieu de partir sur un déplacement que
+        # `Ligne.deplacer` refuse.
+        self._ligne_avant_glissement = None
+        self._rafraichir_zone_deplacement()
         self.compteur.ajuster_ligne(self.ligne)
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         self.compteur_total = 0
@@ -974,6 +1052,7 @@ class FenetrePrincipale(QMainWindow):
         # Fin d'analyse : la ligne redevient déplaçable, bande comprise.
         if self.ligne is not None:
             self.ligne.deverrouiller()
+        self._rafraichir_zone_deplacement()
         self._en_analyse = False
         self._session_ouverte = False
         self.btn_pause.setText("Pause")
@@ -1079,16 +1158,20 @@ class FenetrePrincipale(QMainWindow):
 
     def _boites_comptees_a_afficher(
         self, resultat
-    ) -> list[tuple[int, float, float, float, float]]:
+    ) -> list[tuple[int, float, float, float, float, float]]:
         """Les boîtes vertes encore visibles à cette frame, les plus récentes en
         tête.
 
         **Deux bornes, et chacune rattrape la défaillance de l'autre.**
 
-        - **La durée** (`DUREE_BOITE_COMPTEE_FRAMES`) décide de la vie d'une
-          boîte : 145 frames, soit le temps que la personne met à traverser les
-          100 px de bande situés après la ligne. Passé ce délai elle n'est plus
-          dans la zone, la garder n'apprend rien à l'opérateur.
+        - **La durée** (`DUREE_BOITE_COMPTEE_FRAMES`) décide de la vie pleine
+          d'une boîte : 145 frames, soit le temps que la personne met à traverser
+          les 100 px de bande situés après la ligne. Passé ce délai elle n'est
+          plus dans la zone, mais elle n'est PAS effacée : elle entre en fondu
+          sur `DUREE_FONDO_BOITE_COMPTEE_FRAMES` frames supplémentaires, ce qui
+          répond au défaut constaté — une boîte verte qui s'éteint pile sur la
+          bordure de la bande alors que la personne est encore visible à
+          l'écran. Le 6e élément de chaque tuple est cette opacité.
         - **Le nombre** (`TAILLE_MAX_BOITES_COMPTES`) est le filet : si la règle
           de durée ne purgeait pas — `frame_index` figé, compteur de test qui ne
           progresse pas — la liste ne pourrait pas croître sans fin.
@@ -1119,20 +1202,39 @@ class FenetrePrincipale(QMainWindow):
         # d'appeler cette méthode sans réassigner son résultat pour que la
         # liste grossisse sans fin. La borne est donc une propriété de la
         # méthode, pas une promesse faite à celui qui l'appelle.
-        accumulees = list(self._boites_comptees)
+        # `self._boites_comptees` porte DÉJÀ une opacité (calculée à la frame
+        # précédente) : on n'en garde que les cinq premières composantes, sans
+        # quoi l'opacité d'il y a une frame se ferait empiler sur la nouvelle à
+        # chaque image et la liste grossirait d'un élément par frame.
+        accumulees = [boite[:5] for boite in self._boites_comptees]
         for ev in getattr(resultat, "evenements", None) or []:
             if ev.bbox is not None:
                 accumulees.append((ev.frame, *ev.bbox))
 
         # La borne de durée est la règle normale. `frame_index` avance de 1 par
-        # frame traitée : une boîte vit exactement DUREE_BOITE_COMPTEE_FRAMES
-        # frames, puis s'efface.
+        # frame traitée : une boîte vit DUREE_BOITE_COMPTEE_FRAMES frames en
+        # pleine opacité, puis DUREE_FONDO_BOITE_COMPTEE_FRAMES frames en fondu
+        # avant de s'éteindre.
         frame = resultat.frame_index
-        vivantes = [
-            boite
-            for boite in accumulees
-            if frame - boite[0] <= DUREE_BOITE_COMPTEE_FRAMES
-        ]
+        duree_totale = DUREE_BOITE_COMPTEE_FRAMES + DUREE_FONDO_BOITE_COMPTEE_FRAMES
+        vivantes = []
+        for boite in accumulees:
+            age = frame - boite[0]
+            if age > duree_totale:
+                continue
+            # Opacité pleine pendant la durée nominale, puis décroissante
+            # linéairement jusqu'à zéro. Une boîte comptée est peinte à SA
+            # position de franchissement (l'overlay ne la suit pas) : le fondu
+            # est donc ce qui dit à l'opérateur « elle s'éteint » plutôt que
+            # « le compteur ne suit plus personne ».
+            if age <= DUREE_BOITE_COMPTEE_FRAMES:
+                alpha = 1.0
+            else:
+                alpha = 1.0 - (age - DUREE_BOITE_COMPTEE_FRAMES) / (
+                    DUREE_FONDO_BOITE_COMPTEE_FRAMES
+                )
+                alpha = min(1.0, max(0.0, alpha))
+            vivantes.append((*boite, alpha))
         # La plus récente d'abord : un dépassement du plafond sacrifie alors les
         # plus anciennes, celles que l'opérateur a déjà eu le temps de voir.
         vivantes.sort(key=lambda boite: boite[0], reverse=True)

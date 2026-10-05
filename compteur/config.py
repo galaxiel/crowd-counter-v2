@@ -145,7 +145,29 @@ BANDE_APRES_PX = 100
 #: la personne reste dans la zone utile après son comptage. La borne est donc
 #: le TEMPS DE VISIBILITÉ, pas un clignotement : on veut voir la personne
 #: s'éloigner, pas la voir disparaître.
+#:
+#: Passé ce délai, la boîte ne disparaît pas : elle entre en FONDU (voir
+#: `DUREE_FONDO_BOITE_COMPTEE_FRAMES`).
 DUREE_BOITE_COMPTEE_FRAMES = 145
+
+#: Durée du FONDU, en frames traitées, qui prolonge la vie visible d'une boîte
+#: comptée APRÈS sa sortie de la bande, à opacité décroissante.
+#:
+#: 75 frames ≈ 2,5 s à 25 i/s. La vie totale d'une boîte est donc
+#: `DUREE_BOITE_COMPTEE_FRAMES + DUREE_FONDO_BOITE_COMPTEE_FRAMES` = 220 frames.
+#:
+#: **Pourquoi un fondu plutôt qu'une disparition sèche.** Sans lui, la boîte
+#: s'éteint exactement sur la bordure de la bande, alors que la personne est
+#: encore à l'écran : l'opérateur lit ça comme « le compteur ne voit plus
+#: personne », alors qu'il en a précisément fini de la suivre. Et une boîte
+#: figée à sa dernière position de franchissement maintenue en pleine
+#: opacité pendant plusieurs secondes dirait la même chose. Le fondu tient les
+#: deux : la boîte reste visible assez longtemps pour qu'on la suive des yeux,
+#: et son atténuation dit qu'elle s'éteint au lieu de s'être arrêtée.
+#:
+#: C'est une pure durée D'AFFICHAGE. La bande de détection n'est pas élargie,
+#: donc le tracker ne suit personne plus loin et le décompte est inchangé.
+DUREE_FONDO_BOITE_COMPTEE_FRAMES = 75
 
 #: Facteur d'assombrissement appliqué HORS de la bande de détection, à
 #: l'affichage uniquement. L'image reste lisible : c'est un voile, pas un

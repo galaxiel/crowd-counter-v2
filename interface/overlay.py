@@ -57,18 +57,21 @@ def dessiner(
     ligne: "Ligne | None" = None,
     afficher_ids: bool = True,
     flash: bool = False,
-    boites_comptees: "list[tuple[int, float, float, float, float]] | None" = None,
+    boites_comptees: "list[tuple[int, float, float, float, float, float]] | None" = None,
 ) -> np.ndarray:
     """Retourne une copie annotée. ``img`` n'est jamais modifiée.
 
     ``img`` et ``resultat.image`` sont normalement le même tableau ; la copie
     protectrice est faite ici, elle n'a pas à être faite par l'appelant.
 
-    ``boites_comptees`` est une liste de `(frame_comptage, x1, y1, x2, y2)`
-    déjà bornée en durée et en nombre par l'appelant. Ce module ne la purge
-    pas et ne la décide pas : il ne fait que la peindre. Une boîte verte est
-    donc peinte à sa POSITION de franchissement, pas à la position courante de
-    la personne — c'est voulu, la personne a été lâchée à cet instant.
+    ``boites_comptees`` est une liste de
+    `(frame_comptage, x1, y1, x2, y2, opacite)` déjà bornée en durée et en
+    nombre par l'appelant. Ce module ne la purge pas et ne la décide pas : il ne
+    fait que la peindre. Une boîte verte est donc peinte à sa POSITION de
+    franchissement, pas à la position courante de la personne — c'est voulu,
+    la personne a été lâchée à cet instant. C'est l'`opacite` qui empêche cette
+    boîte figée de ressembler à un suivi qui s'est arrêté : elle s'éteint
+    progressivement au lieu de disparaître d'un coup.
     """
     sortie = _copie_de_travail(img)
 
@@ -87,8 +90,16 @@ def dessiner(
     # (elle n'a fait que passer la ligne), donc sa boîte d'ambre est encore là
     # — le vert doit passer AU-DESSUS, sinon le raté resterait invisible, ce
     # qui viderait la couleur de son but.
-    for _frame, x1, y1, x2, y2 in boites_comptees or []:
-        _boite(sortie, x1, y1, x2, y2, COULEUR_COMPTEE)
+    for boite in boites_comptees or []:
+        # Un 5-tuple sans opacité reste accepté : c'est une boîte pleine, et
+        # l'interface n'a pas à changer pour peindre une boîte opaque.
+        _frame, x1, y1, x2, y2 = boite[:5]
+        opacite = boite[5] if len(boite) > 5 else 1.0
+        # L'opacité est appliquée au COULEUR, pas à un calque : on mélange le
+        # vert avec le pixel déjà peint sous la boîte. Mélanger l'image
+        # entière pour chaque boîte coûterait une copie de 640x480 par boîte et
+        # jusqu'à 200 boîtes par frame — le vert doit rester免费 par construction.
+        _boite(sortie, x1, y1, x2, y2, _fondre(COULEUR_COMPTEE, sortie, x1, y1, opacite))
 
     for t in getattr(resultat, "tracks", None) or []:
         cx, cy = int(t.center[0]), int(t.center[1])
@@ -158,4 +169,28 @@ def _boite(img: np.ndarray, x1, y1, x2, y2, couleur) -> None:
         couleur,
         2,
         lineType=cv2.LINE_AA,
+    )
+
+def _fondre(couleur, img, x1, y1, opacite: float) -> tuple:
+    """Mélange ``couleur`` avec le fond réel, pour un tracé semi-transparent.
+
+    On ne dessine pas sur un calque séparé : on calcule la couleur du trait
+    comme un mélange entre le vert et le pixel déjà peint sous la boîte. Le
+    résultat est un fondu visuellement équivalent pour un trait de 2 px, au
+    coût d'une lecture de deux pixels.
+
+    Le pixel d'échantillonnage est le coin haut-gauche de la boîte, borné dans
+    l'image : une boîte de comptage peut être à moitié hors cadre, et un index
+    négatif lirait — en numpy — le bas de l'image, donc un vert qui ne
+    s'éteindrait pas du tout.
+    """
+    if opacite >= 1.0:
+        return couleur
+    hauteur, largeur = img.shape[:2]
+    px = min(max(int(x1), 0), largeur - 1)
+    py = min(max(int(y1), 0), hauteur - 1)
+    fond = img[py, px].astype(np.float32)
+    return tuple(
+        int(round(float(c) * opacite + float(f) * (1.0 - opacite)))
+        for c, f in zip(couleur, fond)
     )

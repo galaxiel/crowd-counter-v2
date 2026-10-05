@@ -41,6 +41,7 @@ from PySide6.QtGui import QMouseEvent  # noqa: E402
 
 from compteur.types import Evenement, FrameResult  # noqa: E402
 from interface.app import AVERTISSEMENT_SENS, FenetrePrincipale  # noqa: E402
+from interface.overlay import dessiner  # noqa: E402
 
 # Cadence de la vidéo synthétique : 25 i/s. Les tests d'affichage en dépendent
 # (0,25x -> 160 ms entre deux images affichées).
@@ -965,7 +966,10 @@ def test_la_liste_des_boites_comptees_est_bornee(application, fenetre):
     âgée, et le plafond en nombre résiste même quand la durée ne purge rien
     (ici, tous les comptages sur la même frame).
     """
-    from compteur.config import DUREE_BOITE_COMPTEE_FRAMES
+    from compteur.config import (
+        DUREE_BOITE_COMPTEE_FRAMES,
+        DUREE_FONDO_BOITE_COMPTEE_FRAMES,
+    )
     from interface.app import TAILLE_MAX_BOITES_COMPTES
 
     f = fenetre
@@ -986,9 +990,9 @@ def test_la_liste_des_boites_comptees_est_bornee(application, fenetre):
 
     # Une boîte comptée à la frame 0 est encore là bien après le comptage…
     f._boites_comptees_a_afficher(frame(0, [evenement(0)]))
-    # … et a disparu une fois son délai de visibilité dépassé.
+    # … et a disparu une fois son délai de visibilité ET son fondu dépassés.
     assert f._boites_comptees_a_afficher(
-        frame(DUREE_BOITE_COMPTEE_FRAMES + 1, [])
+        frame(DUREE_BOITE_COMPTEE_FRAMES + DUREE_FONDO_BOITE_COMPTEE_FRAMES + 1, [])
     ) == []
 
     # Le plafond en nombre tient même si rien n'expire : 300 comptages sur une
@@ -996,3 +1000,131 @@ def test_la_liste_des_boites_comptees_est_bornee(application, fenetre):
     for i in range(300):
         f._boites_comptees_a_afficher(frame(0, [evenement(i)]))
     assert len(f._boites_comptees) <= TAILLE_MAX_BOITES_COMPTES
+
+
+def test_la_boite_comptee_sestompe_apres_la_bande_et_suit_le_glisser(
+    application, fenetre
+):
+    """Les deux demandes de l'opérateur, en un seul geste vérifié.
+
+    **1. La boîte verte survit à la sortie de la bande, en s'estompant.** Elle
+    était pleine pendant toute la durée nominale (le temps de traverser les
+    100 px après la ligne) ; au-delà elle reste affichée mais son opacité
+    décroît jusqu'à zéro. Le défaut constaté était une disparition sèche
+    exactement sur la bordure — donc quelqu'un qui s'éteint, pas quelqu'un
+    qu'on abandonne.
+
+    **2. Le glisser-déposer déplace la ligne ET sa bande.** Un clic posé DANS
+    la bande, une ligne existant, followed d'un mouvement : c'est un
+    déplacement. La bande est vérifiée par son rectangle dérivé après le geste,
+    ce qui prouve qu'elle suit sans qu'aucun second état soit synchronisé à la
+    main. Un clic HORS bande reste un tracé, et une analyse en cours rend le
+    geste inopérant au lieu de le laisser tenter un déplacement refusé.
+    """
+    from compteur.config import (
+        DUREE_BOITE_COMPTEE_FRAMES,
+        DUREE_FONDO_BOITE_COMPTEE_FRAMES,
+    )
+    from interface.overlay import COULEUR_COMPTEE
+
+    f = fenetre
+    f.resize(700, 500)
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    f.video.definir_image(img)
+
+    def frame(index, evenements):
+        return FrameResult(image=img, frame_index=index, evenements=evenements)
+
+    def evenement(frame_index):
+        return Evenement(
+            frame=frame_index,
+            timestamp_s=frame_index / 25.0,
+            x=100.0,
+            y=100.0,
+            track_id=frame_index,
+            bbox=(90.0, 90.0, 110.0, 110.0),
+        )
+
+    # -- 1. Le fondu -------------------------------------------------------
+    f._boites_comptees = f._boites_comptees_a_afficher(frame(0, [evenement(0)]))
+    assert f._boites_comptees[0][5] == 1.0, "une boîte fraîche doit être opaque"
+
+    mi_fondu = f._boites_comptees_a_afficher(
+        frame(DUREE_BOITE_COMPTEE_FRAMES + DUREE_FONDO_BOITE_COMPTEE_FRAMES // 2, [])
+    )
+    assert len(mi_fondu) == 1, "la boîte doit SURVIVIR à la sortie de la bande"
+    assert 0.0 < mi_fondu[0][5] < 1.0, "elle doit être entre-deux, passez ni pleine ni absente"
+
+    # Le fondu est RÉELLEMENT peint : le vert doit se mélanger au fond noir.
+    sortie = dessiner(
+        img, frame(0, []), boites_comptees=[(0, 90.0, 90.0, 110.0, 110.0, 0.4)]
+    )
+    couleur = sortie[90, 100].astype(int)
+    attendu = np.array(COULEUR_COMPTEE, dtype=float) * 0.4
+    assert np.allclose(couleur, attendu, atol=2), (
+        f"la boîte en fondu devrait être mélangée au fond, lu {tuple(couleur)}"
+    )
+
+    # -- 2. Le glisser-déposer ---------------------------------------------
+    assert f.definir_ligne((300, 100), (300, 380))
+    zone = f._zone_deplacement()
+    assert zone is not None, "une ligne posée doit rendre sa bande déplaçable"
+    f._rafraichir_zone_deplacement()
+
+    wx, wy = f.video.vers_widget(zone[0] + 5, zone[1] + 5)
+    hors_x, hors_y = f.video.vers_widget(2, 2)
+
+    clics = []
+    f.video.clic.connect(lambda x, y: clics.append((x, y)))
+
+    # Un clic HORS bande reste un tracé.
+    f.video.mousePressEvent(_evenement_souris(hors_x, hors_y))
+    f.video.mouseReleaseEvent(_evenement_souris(hors_x, hors_y, relâché=True))
+    assert len(clics) == 1, "un clic hors bande doit rester un tracé"
+
+    # Un clic DANS la bande, suivi d'un mouvement, déplace.
+    p1_avant, p2_avant = f.ligne.p1, f.ligne.p2
+    rect_avant = f.ligne.rect_bande_detection(640, 480)
+    f.video.mousePressEvent(_evenement_souris(wx, wy))
+    f.video.mouseMoveEvent(_evenement_souris(wx + 60, wy))
+    f.video.mouseReleaseEvent(_evenement_souris(wx + 60, wy, relâché=True))
+
+    assert (f.ligne.p1, f.ligne.p2) != (p1_avant, p2_avant), "la ligne n'a pas bougé"
+    rect_apres = f.ligne.rect_bande_detection(640, 480)
+    assert rect_apres != rect_avant, "la bande n'a PAS suivi la ligne"
+    # Le décalage est identique des deux côtés : c'est une translation, pas
+    # une rotation ni un redimensionnement.
+    dx_ligne = f.ligne.p1[0] - p1_avant[0]
+    assert rect_apres[0] - rect_avant[0] == dx_ligne, (
+        "la bande a glissé différemment de la ligne"
+    )
+
+    # Pendant une analyse, le geste est INOPÉRANT, pas planté.
+    f.ligne.verrouiller()
+    f._rafraichir_zone_deplacement()
+    assert f._zone_deplacement() is None, "une ligne verrouillée ne doit pas être déplaçable"
+    p_avant = f.ligne.p1
+    f.video.mousePressEvent(_evenement_souris(wx, wy))
+    f.video.mouseMoveEvent(_evenement_souris(wx - 80, wy))
+    f.video.mouseReleaseEvent(_evenement_souris(wx - 80, wy, relâché=True))
+    assert f.ligne.p1 == p_avant, "le glissement a bougé une ligne verrouillée"
+
+
+def _evenement_souris(x, y, relâché: bool = False):
+    """Construit un QMouseEvent de presse (ou de relâchement) en coordonnées
+    WIDGET, comme le fait Qt pour un vrai geste."""
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    typ = (
+        QEvent.Type.MouseButtonRelease if relâché else QEvent.Type.MouseButtonPress
+    )
+    bouton = Qt.MouseButton.NoButton if relâché else Qt.MouseButton.LeftButton
+    return QMouseEvent(
+        typ,
+        QPointF(x, y),
+        QPointF(x, y),
+        Qt.MouseButton.LeftButton,
+        bouton,
+        Qt.KeyboardModifier.NoModifier,
+    )

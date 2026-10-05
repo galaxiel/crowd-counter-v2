@@ -54,6 +54,11 @@ class WidgetVideo(QLabel):
 
     clic = Signal(int, int)
     image_changee = Signal(object)
+    #: Glisser-déposer : `(dx, dy)` en pixels IMAGE, émis à chaque mouvement
+    #: tant qu'un déplacement est armé. Le signataire l'applique à la ligne.
+    deplacement = Signal(int, int)
+    #: Fin du glissement : désarme le déplacement.
+    deplacement_fini = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -74,8 +79,28 @@ class WidgetVideo(QLabel):
         # garde à `_synchroniser` : un QRect vide ne peut pas correspondre à
         # une zone réelle, donc le premier appel recalcule toujours.
         self._zone_connue = QRect()
+        #: Déplacement de ligne armé : on retient le point d'ancrage (widget)
+        #: et le décalage cumulé depuis le début du geste (image).
+        self._deplacement_arme = False
+        self._ancre_widget: tuple[float, float] | None = None
+        self._decalage_arme = (0, 0)
+        #: Le rectangle de la bande en pixels IMAGE, ou None. Tant qu'il est
+        #: None — pas de ligne, ou analyse lancée — le clic reste un tracé.
+        self._zone_deplacement: tuple[int, int, int, int] | None = None
 
     # -- API publique ----------------------------------------------------
+
+    def definir_zone_deplacement(
+        self, rect: "tuple[int, int, int, int] | None"
+    ) -> None:
+        """Zone où un clic déplace la ligne et sa bande, en pixels IMAGE.
+
+        `None` rend le glisser-déposer INOPÉRANT : le clic redevient un tracé.
+        C'est ce qu'on fait pendant une analyse, où la ligne est verrouillée —
+        l'opérateur ne peut alors plus rien déplacer, et le glisser ne doit pas
+        planter en déplaçant une ligne que `Ligne.deplacer` refuserait.
+        """
+        self._zone_deplacement = rect
 
     def definir_image(self, img: np.ndarray | None) -> None:
         """Affiche ``img`` (BGR ou gris), ou efface l'affichage si ``None``."""
@@ -100,6 +125,18 @@ class WidgetVideo(QLabel):
         self._recalculer_echelle()
         self._peindre()
         self.image_changee.emit(img)
+
+    def dimensions_image(self) -> "tuple[int, int] | None":
+        """`(largeur, hauteur)` de l'image affichée, ou None si aucune.
+
+        C'est l'image RÉELLEMENT à l'écran, donc celle dont les coordonnées
+        sont celles du widget : une zone de déplacement calculée sur une autre
+        image serait décalée, et le clic porterait à côté.
+        """
+        if self._image is None:
+            return None
+        hauteur, largeur = self._image.shape[:2]
+        return largeur, hauteur
 
     def facteur_echelle(self) -> float:
         """Facteur appliqué à l'image source pour l'afficher. Jamais nul."""
@@ -239,9 +276,77 @@ class WidgetVideo(QLabel):
         super().mousePressEvent(event)
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        x, y = event.position().x(), event.position().y()
+        point = self.vers_pixels(x, y)
+        if point is None:
+            return
+        # Un clic DANS la bande, une ligne existant : on arme le déplacement,
+        # pas un tracé. Le clic reste un tracé dans tous les autres cas — pas
+        # de bande du tout, ou clic hors bande — parce que c'est ainsi qu'on
+        # trace la première ligne, alors qu'aucune bande n'existe encore.
+        if self._dans_zone_deplacement(point):
+            self._deplacement_arme = True
+            # Ancrage en pixels IMAGE : le geste se mesure donc dans l'unité
+            # qui compte pour la ligne, pas dans celle du widget.
+            self._ancre_widget = point
+            self._decalage_arme = (0, 0)
+            return
+        self.clic.emit(point[0], point[1])
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (API Qt)
+        """Déplace la ligne ET sa bande, en poussant la même quantité.
+
+        La bande n'est pas déplacée séparément : elle est DÉRIVÉE de la ligne
+        (`Ligne.rect_bande_detection`), donc `deplacement` ne porte que le
+        décalage et la bande suit par construction — aucun second état ne peut
+        diverger.
+
+        Le décalage est mesuré depuis l'ANCRAGE du geste, pas depuis le
+        mouvement précédent : un `mouseMoveEvent` peut être coalescé par Qt
+        quand la souris bouge vite, et un incrément par événement perdrait alors
+        des pixels.
+        """
+        super().mouseMoveEvent(event)
+        if not self._deplacement_arme or self._ancre_widget is None:
+            return
         point = self.vers_pixels(event.position().x(), event.position().y())
-        if point is not None:
-            self.clic.emit(point[0], point[1])
+        if point is None:
+            return
+        # Le curseur peut sortir de l'image pendant le geste : on borne le
+        # décalage aux dimensions de la source plutôt que de le perdre, sinon
+        # la boîte réapparaîtrait en sautant quand le curseur rentre.
+        hauteur, largeur = self._image.shape[:2]
+        ax, ay = self._ancre_widget
+        dx = min(max(point[0] - ax, -largeur), largeur)
+        dy = min(max(point[1] - ay, -hauteur), hauteur)
+        if (dx, dy) == self._decalage_arme:
+            return
+        self._decalage_arme = (dx, dy)
+        self.deplacement.emit(dx, dy)
+        self.update()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (API Qt)
+        """Désarme le déplacement, bouton gauche ou non."""
+        super().mouseReleaseEvent(event)
+        if not self._deplacement_arme:
+            return
+        self._deplacement_arme = False
+        self._ancre_widget = None
+        self._decalage_arme = (0, 0)
+        self.deplacement_fini.emit()
+
+    def _dans_zone_deplacement(self, point: tuple[int, int]) -> bool:
+        """Le point pixel est-il dans la bande déplaçable ?
+
+        Les bords sont INCLUSIFS des deux côtés : une bande de rognage va
+        souvent jusqu'au bord de l'image, et un clic exactement dessus est un
+        clic sur la bande, pas à côté.
+        """
+        if self._zone_deplacement is None or self._image is None:
+            return False
+        x1, y1, x2, y2 = self._zone_deplacement
+        px, py = point
+        return x1 <= px <= x2 and y1 <= py <= y2
 
 
 def _vers_rgb(img: np.ndarray) -> np.ndarray:
