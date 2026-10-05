@@ -161,10 +161,19 @@ def test_fenetre_se_construit(application):
     assert f.compteur is None
 
 
-def test_fenetre_a_le_titre_attendu(application):
-    """Le contrôleur lance `python -c ... ; print(f.windowTitle())`."""
+def test_fenetre_a_le_titre_avec_le_numero_de_version(application):
+    """Le numéro de version vient du moteur, et le titre l'affiche.
+
+    Le titre de la fenêtre est le SEUL endroit où un utilisateur regarde pour
+    savoir quelle version il a. Il est donc construit depuis `compteur.VERSION`
+    — jamais depuis un littéral ici : ce test compare le titre à la constante,
+    donc une redéfinition divergente échouerait au lieu de passer en silence.
+    """
+    from compteur import VERSION
+
     f = FenetrePrincipale()
-    assert f.windowTitle() == "Compteur de manifestation"
+    assert VERSION in f.windowTitle()
+    assert f"Compteur de manifestation — {VERSION}" == f.windowTitle()
 
 
 def test_aucun_chargement_de_modele_a_l_ouverture(application, monkeypatch):

@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from compteur import VERSION
 from compteur.compteur import Compteur
 from compteur.config import (
     BANDE_APRES_PX,
@@ -145,7 +146,7 @@ class FenetrePrincipale(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Compteur de manifestation")
+        self.setWindowTitle(f"Compteur de manifestation — {VERSION}")
         self.resize(1400, 850)
 
         self.config: Config = Config.defauts()

@@ -56,7 +56,9 @@ def trouver_exe() -> pathlib.Path | None:
 #: Modèle attendu à côté de l'exécutable (valeur de config/default.json).
 MODELE_ATTENDU = "medium.pt"
 
-#: Titre de la fenêtre principale (interface/app.py).
+#: Préfixe du titre de la fenêtre principale (interface/app.py, qui y ajoute
+#: `compteur.VERSION`). Un bout de chaîne suffit : la vérification porte sur le
+#: logiciel, pas sur le format du titre, qui peut évoluer sans qu'elle casse.
 TITRE_ATTENDU = "Compteur de manifestation"
 
 #: Extrait de la sortie console qui trahit le repli silencieux de Config.
