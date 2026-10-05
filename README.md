@@ -220,6 +220,28 @@ Under PyInstaller, two traps were handled explicitly (see
 - CUDA DLLs are loaded by `torch.ops.load_library()`, never by an `import`:
   PyInstaller does not find them on its own.
 
+## Two builds: which one do you want?
+
+| | v1 | v2 |
+|---|---|---|
+| Download | **4.3 GB** | **160 MB** |
+| Needs internet | no | yes, on first launch |
+| Administrator rights | no | no |
+| First launch | immediate | downloads PyTorch (~2.4 GB CUDA, ~200 MB CPU) |
+| Windows version | any | 10 or later |
+
+**v2 is the one to try.** The executable does not contain PyTorch; it fetches
+the right version on first launch and caches it in
+`%LOCALAPPDATA%\CompteurManifestation\`. Later launches start normally.
+
+v1 still exists and still works — it needs no network at all, which matters if
+you are analysing videos on a machine with no connection.
+
+Download v2 from the [releases page](../../releases).
+
+> The first launch needs internet. A machine that has neither an NVIDIA card nor
+> a working download path falls back to CPU (~200 MB), which works but is slow.
+
 ## Building the executable
 
 **Build from a clean virtual environment.** This is not advice — it is the
