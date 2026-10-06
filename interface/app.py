@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -49,7 +50,7 @@ from PySide6.QtWidgets import (
 )
 
 from compteur import VERSION
-from compteur.compteur import Compteur
+from compteur.compteur import TAILLE_LOT_DETECTION, Compteur
 from compteur.config import (
     BANDE_APRES_PX,
     BANDE_AVANT_PX,
@@ -155,6 +156,11 @@ class FenetrePrincipale(QMainWindow):
 
         self.config: Config = Config.defauts()
         self.cap = None
+        #: Nombre total de frames annoncées par la vidéo chargée (0 si le
+        #: conteneur ne le dit pas) : c'est le maximum de la barre de
+        #: progression. Un conteneur muet sur ce chiffre bascule la barre en
+        #: mode « occupé » plutôt qu'en pourcentage faux.
+        self._nb_frames_video = 0
         self.video_finiment: pathlib.Path | None = None
         self.detecteur = None
         self.tracker = None
@@ -225,9 +231,22 @@ class FenetrePrincipale(QMainWindow):
         racine.setContentsMargins(8, 8, 8, 8)
         racine.setSpacing(10)
 
+        # La vidéo ET sa barre de progression forment un bloc : la barre est
+        # lisible SOUS l'image, là où l'œil reste pendant l'analyse. La
+        # noyer dans la colonne de droite, entre le compteur et les réglages,
+        # la rendrait invisible — et l'opérateur repartirait à ne pas savoir
+        # où en est le traitement.
         self.video = WidgetVideo()
         self.video.setMinimumWidth(760)
-        racine.addWidget(self.video, stretch=3)
+        colonne_video = QVBoxLayout()
+        colonne_video.addWidget(self.video, stretch=1)
+
+        self.barre_progression = QProgressBar()
+        self.barre_progression.setFormat("%v / %m frames (%p %)")
+        self.barre_progression.setVisible(False)
+        colonne_video.addWidget(self.barre_progression)
+
+        racine.addLayout(colonne_video, stretch=3)
 
         colonne = QVBoxLayout()
         racine.addLayout(colonne, stretch=2)
@@ -549,6 +568,15 @@ class FenetrePrincipale(QMainWindow):
 
         nb_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         fps = self._fps()
+        # La barre de progression est calée sur le total ANNONCÉ par le
+        # conteneur. Total inconnu (0) : plage vide (min == max), le mode
+        # « occupé » de QProgressBar — mieux qu'un pourcentage faux.
+        self._nb_frames_video = nb_frames
+        if nb_frames > 0:
+            self.barre_progression.setRange(0, nb_frames)
+        else:
+            self.barre_progression.setRange(0, 0)
+        self.barre_progression.setValue(0)
         analyse = self._resolution_analyse_pour(cap)
         largeur = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         hauteur = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
@@ -626,6 +654,11 @@ class FenetrePrincipale(QMainWindow):
         # rapport avec cette vidéo-ci et disparaît avec elle.
         self.recap.effacer()
         self.recap.setVisible(False)
+        # La barre de progression appartient à la vidéo précédente : elle est
+        # masquée et repartira de zéro au prochain « Lancer ».
+        self.barre_progression.setValue(0)
+        self.barre_progression.setVisible(False)
+        self._nb_frames_video = 0
         self.maj_compteurs(0, 0, 0)
 
     def _afficher_premiere_frame(self) -> None:
@@ -1008,6 +1041,11 @@ class FenetrePrincipale(QMainWindow):
         self.recap.effacer()
         self.recap.setVisible(False)
         self._ouvrir_session()
+        # La barre de progression vit de « Lancer » au prochain chargement de
+        # vidéo : en fin d'analyse elle reste visible à sa dernière valeur —
+        # l'opérateur voit d'un coup d'œil que la scène est allée au bout.
+        self.barre_progression.setValue(0)
+        self.barre_progression.setVisible(True)
         self._maj_boutons()
         self.label_statut.setText("Analyse en cours…")
         self._timer_traitement.start()
@@ -1130,27 +1168,35 @@ class FenetrePrincipale(QMainWindow):
     # -- Boucle de lecture ------------------------------------------------
 
     def _tick(self) -> None:
-        """Traite UNE frame. Ne dessine rien : c'est `_afficher` qui décide.
+        """Traite UN LOT de frames : détection groupée, comptage séquentiel.
 
-        La séparation est ce qui rend la vitesse de présentation inoffensive.
-        `_afficher` sera rappelle moins souvent, ou plus souvent, sans que la
-        cadence de détection, de tracking et de comptage soit touchée.
+        La séparation d'avec `_afficher` reste entière — et prend encore plus
+        de sens ici : un lot de 4 frames produit 4 résultats, seuls le
+        dernier et les compteurs sont poussés à l'écran. Les événements des
+        frames intermédiaires ne sont pas perdus : `_dernier_evenement_affiche`
+        les rattrape depuis l'historique du compteur, écrit précisément pour
+        des frames traitées mais non affichées.
         """
         if self.cap is None or self.compteur is None:
             self._timer_traitement.stop()
             return
 
-        ok, img = self.cap.read()
-        if not ok:
+        fps = self._fps()
+        lot = []
+        while len(lot) < TAILLE_LOT_DETECTION:
+            ok, img = self.cap.read()
+            if not ok:
+                break
+            lot.append((img, self.frames, self.frames / fps))
+            self.frames += 1
+
+        if not lot:
             self.arreter()
             self._afficher_bilan()
             return
 
-        fps = self._fps()
-        self._resultat_courant = self.compteur.traiter_frame(
-            img, self.frames, self.frames / fps
-        )
-        self.frames += 1
+        resultats = self.compteur.traiter_lot(lot)
+        self._resultat_courant = resultats[-1]
 
     def _afficher(self) -> None:
         """Pousse la dernière frame traitée vers l'écran et les compteurs.
@@ -1274,6 +1320,11 @@ class FenetrePrincipale(QMainWindow):
         # `str(int)` : le chiffre est lu de loin, un « 42.0 » se lirait mal et
         # une largeur changeante ferait Sauter l'alignement.
         self.label_compteur.setText(str(int(total)))
+        # Barre de progression : frames TRAITÉES rapportées au total annoncé.
+        # Elle avance à la cadence d'affichage (~15 i/s), pas de traitement —
+        # largement suffisant pour lire « où on en est ».
+        if self._nb_frames_video > 0:
+            self.barre_progression.setValue(min(int(self.frames), self._nb_frames_video))
         # `presents` et `frames` sont enregistrés mais plus affichés : le
         # second alimente encore l'avertissement « 0 compté », qui raisonne en
         # secondes de VIDÉO, et le premier le bilan de fin d'analyse.

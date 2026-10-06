@@ -235,7 +235,63 @@ class Detecteur:
             kw["half"] = True
         results = self.modele(img, **kw)
         # Une image en entrée donne un résultat ; ultralytics renvoie une liste.
-        resultat = results[0]
+        return self._vers_detections(results[0], decalage_x, decalage_y)
+
+    def detecter_lot(
+        self, imgs: list[np.ndarray], bande: tuple[int, int, int, int] | None = None
+    ) -> list[list[Detection]]:
+        """Détecte PLUSIEURS images en un appel modèle, sans changer le résultat.
+
+        Pourquoi grouper : le GPU paie des frais fixes à chaque appel
+        (transfert, préparation, emballage des résultats). Les partager sur un
+        lot réduit ces frais par image ; c'est le seul gain, la SEMANTIQUE est
+        inchangée — ultralytics traite chaque image d'un lot indépendamment
+        (redimension, NMS), et renvoie les résultats dans l'ordre des images
+        d'entrée.
+
+        `bande` est le MÊME rectangle pour tout le lot : la ligne est
+        verrouillée pendant une analyse, donc le décalage aussi. Même contrat
+        de sortie que `detecter`, par image : une liste de listes de
+        `Detection` en coordonnées de l'image pleine.
+
+        Un lot d'une seule image repasse par `detecter` : le chemin unitaire
+        reste LA référence du comportement.
+        """
+        if len(imgs) == 1:
+            return [self.detecter(imgs[0], bande)]
+
+        if bande is not None:
+            x1, y1, x2, y2 = (int(v) for v in bande)
+            # Même exigence de contiguïté que dans `detecter`, pour chaque
+            # image du lot.
+            images = [np.ascontiguousarray(img[y1:y2, x1:x2]) for img in imgs]
+            decalage_x, decalage_y = x1, y1
+        else:
+            images = list(imgs)
+            decalage_x = decalage_y = 0
+
+        kw = dict(
+            conf=self.config.seuil_confiance,
+            imgsz=self.config.taille_entree,
+            verbose=False,
+        )
+        if self._half:
+            kw["half"] = True
+        resultats = self.modele(images, **kw)
+        return [
+            self._vers_detections(r, decalage_x, decalage_y) for r in resultats
+        ]
+
+    def _vers_detections(
+        self, resultat, decalage_x: float, decalage_y: float
+    ) -> list[Detection]:
+        """Convertit UN résultat ultralytics en `Detection` décalées, filtrées.
+
+        Les filtrages (seuil de confiance, taille minimale, classes retenues)
+        sont appliqués ici même si le modèle est déjà paramétré : c'est la
+        seule garantie que la valeur de `Config` fait autorité, quel que soit
+        le modèle fourni.
+        """
         boites = resultat.boxes
         if boites is None or len(boites) == 0:
             return []

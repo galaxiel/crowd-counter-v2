@@ -21,6 +21,13 @@ from .types import Evenement, FrameResult, Resultat
 
 log = logging.getLogger(__name__)
 
+#: Nombre d'images passées en UN seul appel au modèle. Le gain vient du
+#: partage des frais fixes d'appel GPU (transfert, préparation, emballage des
+#: résultats) ; le comptage, lui, reste strictement frame par frame — voir
+#: `Compteur.traiter_lot`. Au-delà de 4, la mémoire et la latence augmentent
+#: sans gain notable pour un modèle de cette taille.
+TAILLE_LOT_DETECTION = 4
+
 
 class Compteur:
     """Machine à états du comptage : une frame à la fois.
@@ -213,7 +220,58 @@ class Compteur:
     def traiter_frame(
         self, img: np.ndarray, frame_index: int, timestamp_s: float
     ) -> FrameResult:
+        """Détection unitaire puis intégration dans la machine à états."""
         detections = self.detecteur.detecter(img, self._bande_pour(img))
+        return self._integrer(img, detections, frame_index, timestamp_s)
+
+    def traiter_lot(
+        self, frames: list[tuple[np.ndarray, int, float]]
+    ) -> list[FrameResult]:
+        """Détecte un lot en UN appel modèle, puis compte frame par frame.
+
+        Seule la DÉTECTION est groupée — c'est le seul poste où grouper paie.
+        Le suivi et la machine à états restent strictement séquentiels : un
+        track est apparié à SA frame précédente, l'ordre des frames est donc
+        invariant, et les résultats sont ceux qu'aurait donnés
+        `traiter_frame` en boucle (ultralytics traite chaque image d'un lot
+        indépendamment : redimension, NMS). La bande est lue sur la première
+        frame du lot : une vidéo ne change pas de résolution en plein flux,
+        et la ligne est verrouillée pendant l'analyse.
+
+        `frames` est une liste de triplets `(image, index, timestamp)`.
+        """
+        if not frames:
+            return []
+        bande = self._bande_pour(frames[0][0])
+        if hasattr(self.detecteur, "detecter_lot"):
+            detections_par_frame = self.detecteur.detecter_lot(
+                [img for img, _index, _ts in frames], bande
+            )
+        else:
+            # Détecteurs de test (FauxDetecteur et cie) : pas de lot — chemin
+            # unitaire, même bande pour tout le lot, comme le vrai chemin.
+            detections_par_frame = [
+                self.detecteur.detecter(img, bande) for img, _index, _ts in frames
+            ]
+        return [
+            self._integrer(img, detections, index, ts)
+            for (img, index, ts), detections in zip(frames, detections_par_frame)
+        ]
+
+    def _integrer(
+        self,
+        img: np.ndarray,
+        detections: list,
+        frame_index: int,
+        timestamp_s: float,
+    ) -> FrameResult:
+        """Machine à états du comptage pour UNE frame déjà détectée.
+
+        Corps historique de `traiter_frame`, sorti tel quel pour que la voie
+        groupée (`traiter_lot`) et la voie unitaire partagent EXACTEMENT la
+        même logique de comptage — toute différence y serait un décompte faux
+        selon la taille du lot.
+        """
         tracks = self.tracker.mettre_a_jour(detections, frame_index)
         nouveaux: list[Evenement] = []
         ligne = self.ligne
@@ -427,17 +485,29 @@ def analyser_video(
 
     debut = time.time()
     index = 0
+    prochain_palier = 100
     try:
         while True:
-            ok, img = cap.read()
-            if not ok:
+            # Lecture par lot : TAILLE_LOT_DETECTION frames en mémoire, une
+            # seule passe de détection groupée, puis comptage séquentiel —
+            # voir `Compteur.traiter_lot`. Les frames d'un lot partiel en fin
+            # de vidéo sont traitées comme les autres.
+            lot = []
+            while len(lot) < TAILLE_LOT_DETECTION:
+                ok, img = cap.read()
+                if not ok:
+                    break
+                lot.append((img, index, index / fps))
+                index += 1
+            if not lot:
                 break
-            resultat_frame = compteur.traiter_frame(img, index, index / fps)
+            resultats = compteur.traiter_lot(lot)
             if callback_frame is not None:
-                callback_frame(resultat_frame)
-            index += 1
-            if total_frames and index % 100 == 0:
+                for resultat_frame in resultats:
+                    callback_frame(resultat_frame)
+            if total_frames and index >= prochain_palier:
                 log.info("%d/%d frames", index, total_frames)
+                prochain_palier += 100
     finally:
         cap.release()
 
