@@ -529,9 +529,21 @@ diverge. Under PyInstaller, this file is embedded and found via `sys._MEIPASS`
 
 ## Tests
 
+The suite never downloads torch and never runs real inference — fake backends
+everywhere, lazy imports in `compteur/detecteur.py` — so it is fast by design.
+Iterate on one module, widen only when needed:
+
 ```bash
-python -m pytest tests/ -v
+python -m pytest tests/test_ligne.py   # one module: seconds
+python -m pytest -m "not slow"         # everything but the heavy few
+python -m pytest -n auto               # full suite, parallel (pytest-xdist)
+python -m pytest                       # full suite, sequential
 ```
+
+The `slow` marker covers the few files that spawn real subprocesses
+(`test_peripherique.py`, `test_demarrage_sans_venv.py`,
+`test_telechargement.py`). Skip them while iterating; run the full suite
+before pushing.
 
 ## Further reading
 

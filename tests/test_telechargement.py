@@ -34,6 +34,10 @@ import sys
 
 import pytest
 
+#: Sous-processus réels (uv, argv, réseau simulé) : parmi les plus lourds de
+#: la suite. Marqués `slow` — voir pytest.ini.
+pytestmark = pytest.mark.slow
+
 from compteur import telechargement as tl
 
 

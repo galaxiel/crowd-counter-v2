@@ -39,6 +39,10 @@ import textwrap
 
 import pytest
 
+#: Sous-processus réels et lecture du `.spec` : les plus lourds de la suite.
+#: Marqués `slow` — voir pytest.ini.
+pytestmark = pytest.mark.slow
+
 RACINE = pathlib.Path(__file__).resolve().parent.parent
 
 #: Les trois modules du chemin critique AVANT que le venv soit interrogeable.

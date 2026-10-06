@@ -19,6 +19,10 @@ import sys
 
 import pytest
 
+#: Lancés en sous-processus (vraie détection de GPU, vrai argv) : parmi les
+#: plus lourds de la suite. Marqués `slow` — voir pytest.ini.
+pytestmark = pytest.mark.slow
+
 from compteur.config import (
     PERIPHERIQUE_AUTO,
     PERIPHERIQUE_CPU,
