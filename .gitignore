@@ -21,7 +21,7 @@ config/local_*.json
 
 # Notes de session (reprise de projet) : pour le dev et l'IA uniquement,
 # pas pour le repo public. Reste sur le disque local.
-NOTE_SESSION.md
+ETAT_PROJET.md
 
 build/
 build-v2/
