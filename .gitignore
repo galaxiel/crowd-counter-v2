@@ -19,6 +19,10 @@ rapport.json
 *_results.txt
 config/local_*.json
 
+# Notes de session (reprise de projet) : pour le dev et l'IA uniquement,
+# pas pour le repo public. Reste sur le disque local.
+OU_EN_EST_ON.md
+
 build/
 build-v2/
 build-venv/
