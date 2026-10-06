@@ -111,18 +111,15 @@ class WidgetVideo(QLabel):
             self.clear()
             return
 
-        # La conversion BGR -> RGB et le `.copy()` de la QImage sont
-        # indispensables : QImage ne copie pas le buffer numpy, il le pointe.
-        # Sans le `.copy()`, le buffer temporaire serait libéré à la sortie de
-        # cette fonction et l'affichage deviendrait un dangling pointer — la
-        # vidéo se gèle ou affiche n'importe quoi.
-        rgb = _vers_rgb(img)
-        h, w = rgb.shape[:2]
-        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
-
+        # L'image pleine résolution reste la source de vérité (conversion des
+        # clics, reconstruction au redimensionnement). Le pixmap, lui, est
+        # produit à la TAILLE D'AFFICHAGE : convertir, copier puis rétrécir
+        # 2 Mo de pixels par frame pour jeter 80 % du résultat était le poste
+        # le plus lourd de l'affichage. Le redimensionnement numpy
+        # (INTER_AREA) est plus rapide que `scaled(SmoothTransformation)` de
+        # Qt et s'applique AVANT les conversions, qui ne portent alors que sur
+        # l'image réduite.
         self._image = img
-        self._pixmap = QPixmap.fromImage(qimg)
-        self._recalculer_echelle()
         self._peindre()
         self.image_changee.emit(img)
 
@@ -255,15 +252,47 @@ class WidgetVideo(QLabel):
     def _peindre(self) -> None:
         if self._image is None:
             return
-        largeur_img = self._image.shape[1]
-        hauteur_img = self._image.shape[0]
+        # Le pixmap est reconstruit ICI, à la taille d'affichage courante :
+        # une fois par nouvelle image ET une fois par redimensionnement de
+        # fenêtre (resizeEvent passe ici aussi). Qt peint ensuite 1:1, plus
+        # aucune mise à l'échelle dans la boucle d'affichage.
+        self._pixmap = self._construire_pixmap()
+        self.setPixmap(self._pixmap)
+
+    def _construire_pixmap(self) -> QPixmap:
+        """Pixmap à la TAILLE D'AFFICHAGE, reconstruit depuis `self._image`.
+
+        Appelé à chaque nouvelle image et à chaque redimensionnement. Le
+        facteur et le décalage viennent de `_recalculer_echelle` : la taille
+        cible est donc exactement celle que `vers_pixels` suppose côté clic —
+        la géométrie des interactions est inchangée.
+        """
+        if self._image is None:
+            return QPixmap()
+        self._recalculer_echelle()
+        hauteur_img, largeur_img = self._image.shape[:2]
         cible = QSize(
             max(1, int(round(largeur_img * self._facteur))),
             max(1, int(round(hauteur_img * self._facteur))),
         )
-        self.setPixmap(
-            self._pixmap.scaled(cible, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        affichee = cv2.resize(
+            self._image,
+            (cible.width(), cible.height()),
+            # INTER_AREA pour la réduction (le cas courant : l'écran est plus
+            # petit que la vidéo), INTER_LINEAR pour l'agrandissement.
+            interpolation=cv2.INTER_AREA
+            if self._facteur < 1.0
+            else cv2.INTER_LINEAR,
         )
+        # La conversion BGR -> RGB et le `.copy()` de la QImage sont
+        # indispensables : QImage ne copie pas le buffer numpy, il le pointe.
+        # Sans le `.copy()`, le buffer temporaire serait libéré à la sortie de
+        # cette fonction et l'affichage deviendrait un dangling pointer — la
+        # vidéo se gèle ou affiche n'importe quoi.
+        rgb = _vers_rgb(affichee)
+        h, w = rgb.shape[:2]
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+        return QPixmap.fromImage(qimg)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (API Qt)
         """Remonte le clic gauche en coordonnées de l'image source.

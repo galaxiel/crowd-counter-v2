@@ -14,7 +14,7 @@ from typing import Callable
 import numpy as np
 
 from .config import BANDE_APRES_PX, BANDE_AVANT_PX, DUREE_BOITE_COMPTEE_FRAMES, Config
-from .detecteur import Detecteur, charger_modele
+from .detecteur import Detecteur, charger_modele, peripherique_effectif
 from .ligne import Ligne
 from .tracker import Tracker
 from .types import Evenement, FrameResult, Resultat
@@ -391,9 +391,12 @@ def analyser_video(
 
     if detecteur is None:
         # `peripherique` ne fait qu'indiquer OÙ charger le modèle : la
-        # logique de comptage plus bas est strictement inchangée.
+        # logique de comptage plus bas est strictement inchangée. La
+        # demi-précision n'est activée que sur un périphérique CUDA réel.
         detecteur = Detecteur(
-            charger_modele(config.modele, config.peripherique), config
+            charger_modele(config.modele, config.peripherique),
+            config,
+            half=peripherique_effectif(config.peripherique).cuda,
         )
     if tracker is None:
         tracker = Tracker(config)

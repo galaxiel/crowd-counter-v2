@@ -457,6 +457,20 @@ class Ligne:
         # et sert de source à la frame suivante. Le slicing produit une VUE
         # numpy, écrire dedans modifierait l'original — un bug invisible à
         # l'écran mais qui corromprait la vidéo analysée.
+        #
+        # Implémentation : UNE passe LUT uint8 sur l'image, puis recollage de
+        # la bande. Le chemin historique passait l'image entière en float32
+        # (conversion, multiplication, clip, reconversion : quatre passes
+        # pleine résolution, le poste le plus lourd du rendu) pour un résultat
+        # identique — la LUT reproduit pixel pour pixel la même sémantique
+        # (`floor(v * facteur)` : `astype(uint8)` tronque, elle aussi).
+        if img.dtype == np.uint8 and img.flags.c_contiguous:
+            cv2 = _cv2()
+            sortie = cv2.LUT(img, (np.arange(256, dtype=np.float32) * FACTEUR_VOILE).astype(np.uint8))
+            sortie[y1:y2, x1:x2] = img[y1:y2, x1:x2]
+            return sortie
+        # Autre dtype ou buffer non contigu (tests, sources exotiques) :
+        # chemin historique, correct quel que soit le type.
         sortie = img.astype(np.float32, copy=True) * FACTEUR_VOILE
         sortie[y1:y2, x1:x2] = img[y1:y2, x1:x2]
         # L'arrondi est fait UNE fois, à la fin : arrondir puis recoller la
@@ -494,9 +508,20 @@ class Ligne:
         # opaque elle masquerait exactement les gens qu'on cherche a compter
         # (sur fond blanc, un pixel sous la bande tombait a 40 au lieu de 255).
         # On la compose donc en translucide ; l'original reste lisible dessous.
-        bande = sortie.copy()
-        cv2.fillPoly(bande, [quad], (40, 40, 40))
-        sortie = cv2.addWeighted(sortie, 0.65, bande, 0.35, 0)
+        # La composition porte sur l'ENCADREMENT du quadrilatère, pas sur la
+        # frame entière : un addWeighted pleine image coûtait une copie et deux
+        # passes sur les 6 Mo de la frame pour peindre une fraction de zone.
+        hauteur, largeur = sortie.shape[:2]
+        x0 = max(0, int(quad[:, 0].min()))
+        x1 = min(largeur, int(quad[:, 0].max()) + 1)
+        y0 = max(0, int(quad[:, 1].min()))
+        y1 = min(hauteur, int(quad[:, 1].max()) + 1)
+        if x1 > x0 and y1 > y0:
+            zone = sortie[y0:y1, x0:x1].copy()  # `.copy()` : ROI contiguë
+            bande = zone.copy()
+            decalage = np.array([x0, y0], dtype=np.int32)
+            cv2.fillPoly(bande, [quad - decalage], (40, 40, 40))
+            sortie[y0:y1, x0:x1] = cv2.addWeighted(zone, 0.65, bande, 0.35, 0)
         cv2.polylines(sortie, [quad], True, jaune, 1, cv2.LINE_AA)
         cv2.line(sortie, p1, p2, vert, 2, cv2.LINE_AA)
 

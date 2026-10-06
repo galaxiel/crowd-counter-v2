@@ -180,9 +180,14 @@ class Detecteur:
     d'affichage.
     """
 
-    def __init__(self, modele, config: Config) -> None:
+    def __init__(self, modele, config: Config, half: bool = False) -> None:
         self.modele = modele
         self.config = config
+        # Demi-précision (FP16) : divise la bande passante mémoire du GPU par
+        # deux sur l'inférence, sans effet mesurable sur la qualité des
+        # boîtes à ce seuil. À n'activer QUE sur CUDA — sur CPU, la valeur
+        # est ignorée par ce drapeau mais resterait plus lente.
+        self._half = bool(half)
 
     def detecter(
         self, img: np.ndarray, bande: tuple[int, int, int, int] | None = None
@@ -218,12 +223,17 @@ class Detecteur:
             img = np.ascontiguousarray(img[y1:y2, x1:x2])
             decalage_x, decalage_y = x1, y1
 
-        results = self.modele(
-            img,
+        kw = dict(
             conf=self.config.seuil_confiance,
             imgsz=self.config.taille_entree,
             verbose=False,
         )
+        # `half` n'est passé QUE quand il est actif : les faux modèles des
+        # tests vérifient les clés réellement envoyées, et un `half=False`
+        # constant changerait la forme de l'appel pour rien.
+        if self._half:
+            kw["half"] = True
+        results = self.modele(img, **kw)
         # Une image en entrée donne un résultat ; ultralytics renvoie une liste.
         resultat = results[0]
         boites = resultat.boxes

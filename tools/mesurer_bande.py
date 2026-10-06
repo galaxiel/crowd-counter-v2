@@ -25,7 +25,7 @@ from compteur.config import (
     BANDE_AVANT_PX,
     Config,
 )
-from compteur.detecteur import Detecteur, charger_modele
+from compteur.detecteur import Detecteur, charger_modele, peripherique_effectif
 from compteur.ligne import Ligne
 from compteur.tracker import Tracker
 
@@ -35,7 +35,11 @@ DUREE_AFFICHAGE_FRAMES = round(BANDE_APRES_PX / CADENCE)
 
 def compter(chemin: str, sense: int, avant: int | None, apres: int | None):
     config = Config(ligne=(640.0, 0.0, 640.0, 720.0), sens=sense)
-    detecteur = Detecteur(charger_modele(config.modele, config.peripherique), config)
+    detecteur = Detecteur(
+        charger_modele(config.modele, config.peripherique),
+        config,
+        half=peripherique_effectif(config.peripherique).cuda,
+    )
     compteur = Compteur(config, detecteur, Tracker(config))
     compteur.ajuster_ligne(
         Ligne(

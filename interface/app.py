@@ -82,6 +82,12 @@ log = logging.getLogger(__name__)
 #: conteneur mal écrit). 25 i/s est le standard des caméras de surveillance.
 FPS_REPLI = 25.0
 
+#: Cadence d'affichage pendant une analyse, en images par seconde. Le
+#: traitement, lui, n'est PAS limité (timer à intervalle 0) : c'est le rendu
+#: CPU par frame affichée qui coûte cher, et l'opérateur n'a pas besoin d'un
+#: aperçu fluide pour lire un compteur. Voir le bloc des minuteries.
+CADENCE_AFFICHAGE_IPS = 15
+
 #: Lien du bouton de soutien. Le `data-slug` du widget Buy Me a Coffee fourni
 #: par l'opérateur est `galaxiel` — le bouton natif ouvre cette page dans le
 #: navigateur, ce qui donne le même résultat sans embarqué de JavaScript.
@@ -377,11 +383,16 @@ class FenetrePrincipale(QMainWindow):
         # utilisateur : l'analyse va aussi vite que la machine le permet.
         self._timer_traitement = QTimer(self)
         self._timer_traitement.setInterval(0)
-        # Affichage : même cadence. Le sélecteur de vitesse a été retiré —
-        # l'opérateur veut le résultat vite, pas un ralenti qui n'influence
-        # d'ailleurs pas le décompte (deux minuteries, le traitement reste à 0).
+        # Affichage : ~15 i/s, PAS la cadence de traitement. Rendre la frame
+        # (voile, boîtes, conversion Qt, mise à l'échelle) coûte en CPU autant
+        # que l'inférence en GPU, et les deux tournent sur le même thread :
+        # afficher chaque frame traitée plafonnerait le débit de comptage.
+        # L'opérateur lit un compteur, pas un film — 15 i/s suffisent largement.
+        # Le rattrapage des événements sautés est déjà prévu (voir
+        # `_dernier_evenement_affiche`, écrit pour des frames non affichées),
+        # et le comptage, lui, reste à la cadence du timer de traitement.
         self._timer_affichage = QTimer(self)
-        self._timer_affichage.setInterval(0)
+        self._timer_affichage.setInterval(1000 // CADENCE_AFFICHAGE_IPS)
 
     def _connecter(self) -> None:
         self.btn_video.clicked.connect(self._on_charger_video)
@@ -945,6 +956,10 @@ class FenetrePrincipale(QMainWindow):
                 self.detecteur = Detecteur(
                     charger_modele(self.config.modele, self.config.peripherique),
                     self.config,
+                    # Demi-précision uniquement sur un GPU réel : sur CPU, la
+                    # valeur ne servirait à rien et sur les faux modèles des
+                    # tests elle changerait la forme de l'appel.
+                    half=peripherique_effectif(self.config.peripherique).cuda,
                 )
                 self._modele_charge = self.config.modele
             if self.tracker is None:
