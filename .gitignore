@@ -30,12 +30,11 @@ dist/
 *.log
 
 # Fichiers de build PyInstaller générés par défaut (`--onefile` en produit
-# un éphémère) : on garde SEULEMENT les .spec du projet, qui sont la
-# description reproductible des exécutables et doivent être relus en code.
-# Les deux versions sont suivies : `crowd-counter.spec` (v1, torch embarqué)
-# et `crowd-counter-v2.spec` (v2, torch téléchargé au premier lancement).
+# un éphémère) : on garde SEULEMENT le .spec du projet, qui est la
+# description reproductible de l'exécutable et doit être relu en code.
+# (Le spec v1 et son dossier hooks/ ont été retirés du projet le 06/10/2026 ;
+# les hooks PyInstaller restants sont dans `hooks-v2/`.)
 *.spec
-!crowd-counter.spec
 !crowd-counter-v2.spec
 
 .pytest_cache/

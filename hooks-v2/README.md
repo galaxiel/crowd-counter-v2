@@ -1,14 +1,11 @@
 # Hooks PyInstaller de la version 2
 
-Ce répertoire n'est utilisé QUE par `crowd-counter-v2.spec` (via
-`hookspath`). La version 1 continue d'utiliser `hooks/`, qui doit rester
-intact : il contient `hook-torchvision.py`, indispensable à la v1 puisque
-celle-ci embarque torch.
-
-| Répertoire | Utilisé par | Effet sur torch |
-|---|---|---|
-| `hooks/` | `crowd-counter.spec` (v1, 4,3 Go) | embarqué, extension `_C_stable.pyd` incluse |
-| `hooks-v2/` | `crowd-counter-v2.spec` (v2, ~50 Mo) | **exclu**, téléchargé au 1er lancement |
+Ce répertoire est utilisé exclusivement par `crowd-counter-v2.spec` (via
+`hookspath`). Depuis le retrait de la v1 (06/10/2026), c'est le seul jeu de
+hooks du projet : l'ancien répertoire `hooks/` et son `crowd-counter.spec`
+sont dans l'historique git, et `HISTOIRE.md` raconte pourquoi la v1 avait
+les siens (elle embarquait torch ; la v2 l'exclut du build et le télécharge
+au premier lancement).
 
 ## Pourquoi des hooks qui ne font rien
 
@@ -23,12 +20,12 @@ traitement des hooks est `reversed(base_hooks + user_hooks)`, et `user_hooks`
 (`hookspath`) est concaténé en dernier : il est donc traité en premier. Voir
 le docstring de `hook-torch.py` pour la référence exacte.
 
-## Ne pas activer les deux répertoires ensemble
+## Ne rien ajouter au `hookspath`
 
-Le `hookpath` de la v2 est `hooks-v2` **seul**. Ajouter `hooks/`
-ferait exécuter `hooks/hook-torchvision.py`, qui fait `import torchvision`
-et `collect_dynamic_libs` au build — donc ~600 Mo de DLL CUDA remises, et un
-build cassé si l'extension change de nom.
+Le `hookpath` de la v2 est `hooks-v2` **seul**. Y ajouter tout autre
+répertoire contenant un `hook-torch.py` ou `hook-torchvision.py` « normal »
+ferait un `import torchvision` et un `collect_dynamic_libs` au build — donc
+~600 Mo de DLL CUDA remises, et un build cassé si l'extension change de nom.
 
 ## Vérifier après un build
 

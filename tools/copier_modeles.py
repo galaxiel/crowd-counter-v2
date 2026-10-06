@@ -1,4 +1,4 @@
-"""Copier les poids `.pt` à côté de `dist/CompteurManifestation/CompteurManifestation.exe`.
+"""Copier les poids `.pt` à côté de `dist/CompteurManifestationV2/CompteurManifestationV2.exe`.
 
 Pourquoi une copie et pas un embarquement dans l'exécutable :
 
@@ -7,7 +7,7 @@ Pourquoi une copie et pas un embarquement dans l'exécutable :
   (`.gitignore` : `*.pt`) ;
 - le modèle est un **paramètre**, pas une dépendance : changer de détecteur,
   en ajouter un, ou essayer un modèle entraîné localement doit se faire en
-  déposant un fichier, sans reconstruire un exécutable de 4 Go ;
+  déposant un fichier, sans reconstruire l'exécutable ;
 - l'archive onefile est ré-écrite en entier à chaque construction : y mettre
   les poids allonge le build sans rien apporter.
 
@@ -34,18 +34,10 @@ RACINE = pathlib.Path(__file__).resolve().parent.parent
 
 #: Dossiers de sortie par défaut. Le `.spec` produit un dossier
 #: (`dist/CompteurManifestationV2/`) et non un `.exe` isolé — voir le README,
-#: section « Lancer sans rien installer ». On tolère les deux : si un build
-#: onefile a été produit, les poids vont à côté du `.exe`.
-#:
-#: ⚠ La V2 passe EN PREMIER, et c'est délibéré. Les deux dossiers coexistent
-#: (la v1 fait 4,3 Go et ne doit pas être écrasée), et la liste ci-dessous
-#: choisit le PREMIER qui existe. Tant que la v2 était absente, un
-#: `copier_modeles.py` sans `--dest` depositait donc les poids dans la v1 —
-#: overwrite silencieux du dossier qu'on soi-dit ne pas toucher. Les poids
-#: étaient identiques, donc aucun dégât, mais l'accident restait possible.
+#: section « Running without installing anything ». On tolère les deux : si un
+#: build onefile a été produit, les poids vont à côté du `.exe`.
 dossiers_cibles = (
     RACINE / "dist" / "CompteurManifestationV2",
-    RACINE / "dist" / "CompteurManifestation",
     RACINE / "dist",
 )
 
@@ -108,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         pathlib.Path(args.dest)
         if args.dest
         # Premier dossier de build présent, dans l'ordre de préférence :
-        # `dist/CompteurManifestation/` (mode dossier) avant `dist/`
+        # `dist/CompteurManifestationV2/` (mode dossier) avant `dist/`
         # (mode onefile, où l'exécutable est à la racine de `dist/`).
         else next((d for d in dossiers_cibles if d.is_dir()), dossiers_cibles[0])
     )
@@ -125,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(
                 f"ERREUR : {dest} n'existe pas. Construis d'abord l'exécutable :\n"
-                "    python -m PyInstaller --clean crowd-counter.spec",
+                "    python -m PyInstaller --clean --workpath build/v2 crowd-counter-v2.spec",
                 file=sys.stderr,
             )
         return 1

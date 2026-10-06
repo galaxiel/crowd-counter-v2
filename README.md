@@ -45,13 +45,13 @@ more real crossings.
 
 ## Running without installing anything
 
-`dist/CompteurManifestation/` is self-contained: Python does not need to be
+`dist/CompteurManifestationV2/` is self-contained: Python does not need to be
 installed on the machine.
 
-1. Copy the whole `dist/CompteurManifestation/` folder **whole** to wherever
+1. Copy the whole `dist/CompteurManifestationV2/` folder **whole** to wherever
    you want (a USB stick, a desktop, `C:\Program Files\`) — the `.exe` alone
    is not enough, it needs its neighbouring DLLs.
-2. Double-click `CompteurManifestation.exe`.
+2. Double-click `CompteurManifestationV2.exe`.
 
 A black console window opens next to the application: that is intentional. It
 shows the log and, if something goes wrong, the traceback. Closing the
@@ -66,7 +66,7 @@ PyInstaller can bundle everything into one file ("onefile"). With torch CUDA
 this mode **does not work**: the archive format uses signed 32-bit offsets,
 and the CUDA DLLs alone weigh 3.8 GB. The binary builds without error, then
 **crashes at launch**, exiting without a message. The details are in
-`crowd-counter.spec`; the workaround (for a CPU install that fits under 2 GB)
+`crowd-counter-v2.spec`; the workaround (for a CPU install that fits under 2 GB)
 is `COMPTEUR_ONEFILE=1`.
 
 The folder mode has a direct advantage for this software: no decompressing
@@ -212,7 +212,7 @@ The application reports it in the status bar and in the console, and analyses
 anyway on the CPU, very slowly.
 
 Under PyInstaller, two traps were handled explicitly (see
-`crowd-counter.spec` and `hooks/hook-torchvision.py`):
+`crowd-counter-v2.spec` and `hooks-v2/hook-torchvision.py`):
 
 - torchvision's NMS extension is called `_C.stable` since 0.29 and is not a
   Python module: without a dedicated hook, inference stops on `Couldn't load
@@ -220,24 +220,21 @@ Under PyInstaller, two traps were handled explicitly (see
 - CUDA DLLs are loaded by `torch.ops.load_library()`, never by an `import`:
   PyInstaller does not find them on its own.
 
-## Two builds: which one do you want?
+## What the download looks like
 
-| | v1 | v2 |
-|---|---|---|
-| Download | **4.3 GB** | **160 MB** |
-| Needs internet | no | yes, on first launch |
-| Administrator rights | no | no |
-| First launch | immediate | downloads PyTorch (~2.4 GB CUDA, ~200 MB CPU) |
-| Windows version | any | 10 or later |
+The executable does not contain PyTorch; it fetches the right version on first
+launch and caches it in `%LOCALAPPDATA%\CompteurManifestation\`. Later launches
+start normally.
 
-**v2 is the one to try.** The executable does not contain PyTorch; it fetches
-the right version on first launch and caches it in
-`%LOCALAPPDATA%\CompteurManifestation\`. Later launches start normally.
+| | |
+|---|---|
+| Download | **160 MB** |
+| Needs internet | yes, on first launch |
+| Administrator rights | no |
+| First launch | downloads PyTorch (~2.4 GB CUDA, ~200 MB CPU) |
+| Windows version | 10 or later |
 
-v1 still exists and still works — it needs no network at all, which matters if
-you are analysing videos on a machine with no connection.
-
-Download v2 from the [releases page](../../releases).
+Download it from the [releases page](../../releases).
 
 > The first launch needs internet. A machine that has neither an NVIDIA card nor
 > a working download path falls back to CPU (~200 MB), which works but is slow.
@@ -245,49 +242,15 @@ Download v2 from the [releases page](../../releases).
 ## Building the executable
 
 **Build from a clean virtual environment.** This is not advice — it is the
-difference between a 4.3 GB executable and a 9.7 GB one.
+difference between a lean executable and a bloated one.
 
 Ultralytics imports its optional inference backends conditionally. If they are
 installed, PyInstaller bundles them: TensorRT (1.5 GB), TensorFlow (1.1 GB),
 ONNX Runtime (741 MB), xformers (413 MB) and bitsandbytes (213 MB). **None of
-them is used** — this project only ever runs PyTorch. That is 5.5 GB of dead
-weight in the output folder.
-
-Excluding them from `crowd-counter.spec` does not work: PyInstaller crashes
-while reading one of their hooks. The reliable approach is to make them
-unavailable in the first place — a virtual environment that never had them.
-
-### Procedure
-
-```bash
-# 1. clean environment, nothing else in it
-python -m venv build-env
-
-# 2. torch CUDA + matching torchvision — see the warning below
-build-env\Scripts\python -m pip install torch==2.14.1+cu126 torchvision==0.29.1+cu126 ^
-    --index-url https://download.pytorch.org/whl/cu126
-
-# 3. the rest
-build-env\Scripts\python -m pip install ultralytics opencv-python PySide6 pyinstaller pytest
-
-# 4. build
-build-env\Scripts\python -m PyInstaller --clean crowd-counter.spec
-build-env\Scripts\python tools/copier_modeles.py
-```
-
-**torch and torchvision must come from the same index.** A CPU-only
-torchvision next to a CUDA torch crashes `torchvision::nms` on CUDA. This is
-the single most common packaging mistake here.
-
-Result: `dist/CompteurManifestation/` — the executable, its `_internal/` folder
-and the weights next to it. **4.3 GB**, launching in ~1.3 s.
-
-### Building v2 — torch downloaded at first launch
-
-Same clean-env rule applies — **never** build v2 from a global Python that has
-TensorFlow, Playwright, DeepSpeed, wandb etc. installed. Ultralytics
-imports its optional backends conditionally, and PyInstaller bundles whatever is
-installed: a polluted interpreter makes the build balloon and take ~15× longer.
+them is used** — this project only ever runs PyTorch. Excluding them from the
+spec does not work: PyInstaller crashes while reading one of their hooks. The
+reliable approach is to make them unavailable in the first place — a virtual
+environment that never had them.
 
 ```bash
 # 1. clean environment, nothing else in it
@@ -300,16 +263,20 @@ build-env\Scripts\python -m pip install torch==2.14.1+cu126 torchvision==0.29.1+
 # 3. the rest — from PyPI, never from the torch index
 build-env\Scripts\python -m pip install ultralytics opencv-python PySide6 pyinstaller pytest
 
-# 4. build — note the v2 spec and the workpath
+# 4. build — note the workpath
 build-env\Scripts\python -m PyInstaller --clean --workpath build/v2 crowd-counter-v2.spec
 build-env\Scripts\python tools/copier_modeles.py
 ```
 
+**torch and torchvision must come from the same index.** A CPU-only
+torchvision next to a CUDA torch crashes `torchvision::nms` on CUDA. This is
+the single most common packaging mistake here.
+
 Result: `dist/CompteurManifestationV2/` — ~290 MB without the weights
 (~360–400 MB with them). torch is NOT bundled; it is downloaded into
 `%LOCALAPPDATA%\CompteurManifestation\` on first launch. The `--workpath
-build/v2` is required — the v2 spec analyses far more modules than the v1 one,
-and sharing the v1 workpath mixes their `.toc` files.
+build/v2` keeps PyInstaller's intermediate `.toc` files in a workpath of their
+own — sharing it with other builds mixes stale state in.
 
 ### Verify the build before shipping it
 
@@ -402,7 +369,7 @@ Counting the people crossing a virtual line, from a video feed coming from a
 moves. Expected order of magnitude: **200 to 300 people** in total at a
 demonstration, walking past spaced out rather than packed.
 
-### What is deliberately out of scope (v1)
+### What is deliberately out of scope
 
 These are not "not yet implemented" — they were considered and ruled out:
 
@@ -546,7 +513,7 @@ config/      default.json: the default values
 installer.py GPU detection + torch installation (CUDA or CPU)
 tools/       command-line scripts
 tests/       pytest
-hooks/       PyInstaller hooks (torchvision)
+hooks-v2/    PyInstaller hooks (torch, torchvision, Qt)
 ```
 
 The key point: `compteur/compteur.py::Compteur` is the engine. The interface

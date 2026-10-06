@@ -12,9 +12,10 @@ Puis copier les poids à côté de l'exécutable :
 
     python tools/copier_modeles.py --dest dist/CompteurManifestationV2
 
-**Ce que change la v2, et pourquoi c'est possible.** La v1 pèse 4,25 Go, dont
+**Ce que change la v2, et pourquoi c'est possible.** La v1 pesait 4,25 Go, dont
 ~3,8 Go de DLL CUDA amenées par `hook-torch.py` via `collect_dynamic_libs`
-(voir `crowd-counter.spec`, section 2). La v2 AJOUTE `torch`, `torchvision`
+(voir `HISTOIRE.md` ; l'ancien `crowd-counter.spec` est dans l'historique git).
+La v2 AJOUTE `torch`, `torchvision`
 et `torchaudio` aux `excludes`, et embarque à la place un seul `uv.exe`.
 Le logiciel installe torch au premier lancement dans
 `%LOCALAPPDATA%\CompteurManifestation\`, sans droits administrateur — voir
@@ -80,8 +81,9 @@ PyInstaller teste le chemin UTILISATEUR **avant** ceux de
 décide. Un `hook-torch.py` qui retourne des listes VIDES gagne donc la
 course contre le hook officiel, et torch n'est pas collecté.
 
-**2. `hooks-v2/hook-torchvision.py` fait la même chose.** Le hook maison
-`hooks/hook-torchvision.py` fait `import torchvision` et
+**2. `hooks-v2/hook-torchvision.py` fait la même chose.** Le hook officiel
+comme l'ancien hook v1 (`hooks/hook-torchvision.py`, retiré du projet) font
+`import torchvision` et
 `collect_dynamic_libs("torchvision")` : les deux amèneraient 600 Mo de DLL CUDA
 au build, et le faire échouer en est pire. La version v2 ne le charge pas
 du tout — voir `hooks-v2/README` pour la preuve par la taille.
@@ -151,7 +153,7 @@ a = Analysis(
         (str(UV_EXE), "."),
     ],
     # torch et torchvision sont VOLONTAIREMENT absents d'`hiddenimports`,
-    # contrairement à `crowd-counter.spec`. Les lister ici alors qu'ils sont
+    # contrairement à ce que faisait le spec v1. Les lister ici alors qu'ils sont
     # exclus produit un avertissement « hidden import not found » et, pire,
     # fait tenter à PyInstaller de les emballer quand même. Ils sont
     # chargés depuis le cache à l'exécution par `compteur.telechargement`.
@@ -188,8 +190,8 @@ a = Analysis(
     # `config/default.json` est bien lu depuis l'exécutable gelé.
     runtime_hooks=[str(RACINE / "tools" / "injection_probe.py")],
     excludes=[
-        # -- Les trois modules torch. À COMPARER avec `crowd-counter.spec`, où
-        #    aucun n'est listé et où tout le poids vient de là. Le retirer de
+        # -- Les trois modules torch. Le spec v1, lui, n'en listait aucun et
+        #    portait tout le poids. Le retirer de
         #    cette liste ne fait pas que grossir l'exécutable : le hook
         #    officiel recollecte les DLL CUDA même exclus.
         "torch",
