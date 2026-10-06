@@ -15,8 +15,7 @@ density estimation.
 - [Running without installing anything](#running-without-installing-anything)
 - [Installing and running from source](#installing-and-running-from-source)
 - [Where to put the models](#where-to-put-the-models)
-- [Performance and GPU](#performance-and-gpu)
-  - [Choosing where the compute happens](#choosing-where-the-compute-happens)
+- [Performance](#performance)
 - [Building the executable](#building-the-executable)
 - [Using the software](#using-the-software)
 - [Design decisions and scope](#design-decisions-and-scope)
@@ -133,10 +132,10 @@ Practical consequence:
 | Where I launch it | Where I put the `.pt` files |
 |---|---|
 | `python main.py` from the root | at the repository root |
-| `dist\CompteurManifestation\CompteurManifestation.exe` | in `dist\CompteurManifestation\` |
+| `dist\CompteurManifestationV2\CompteurManifestationV2.exe` | in `dist\CompteurManifestationV2\` |
 
 Double-clicking the executable makes the executable's own folder the current
-folder: weights dropped into `dist\CompteurManifestation\` therefore appear in
+folder: weights dropped into `dist\CompteurManifestationV2\` therefore appear in
 the dropdown without any configuration.
 
 The field stays **editable**: you can type an absolute path to a `.pt` that is
@@ -151,74 +150,19 @@ python tools/copier_modeles.py
 copies the weights from the root to `dist/`. `--propre` only copies what is
 missing.
 
-## Performance and GPU
+## Performance
 
-**torch must be installed as the CUDA version.** On this machine:
-
-```
-torch 2.14.1+cu126
-torchvision 0.29.1+cu126
-```
-
-That is what `installer.py` does when it detects an NVIDIA card.
-
-### How much it changes
-
-Measured on this machine, on the reference video:
+Measured on the reference video, 4-minute scene:
 
 | Device | Throughput | 4-minute video |
 |---|---|---|
 | CUDA (RTX 4070 SUPER) | ~27 img/s | ~9 min |
 | CPU | ~7 img/s | ~35 min |
 
-A CPU torch works, but the counter becomes unusable live, and long scenes
-will take hours. The executable embeds CUDA — hence its 3 GB. `torch_cuda.dll`
-alone weighs 1 GB, `cublasLt` 500 MB, cuDNN over 1 GB.
-
-### Choosing where the compute happens
-
-The *Calcul sur* setting, in the *Périphérique de calcul* panel:
-
-| Choice | Effect |
-|---|---|
-| **Automatic** (default) | CUDA if the machine has one, CPU otherwise |
-| **NVIDIA GPU (CUDA)** | The GPU is required. Without a card, the analysis **falls back to CPU with a message** — crashing in the field costs more than a slow run you can at least watch |
-| **CPU only** | The processor is required even with a GPU present. This is the remedy when the GPU crashes on a particular scene |
-
-This choice does **not** change the count: the same scene is analysed the same
-way in both cases.
-
-The *Calcul : CUDA — NVIDIA GeForce RTX 4070 SUPER* or *Calcul : CPU
-uniquement* indicator is displayed **permanently** in the status bar, under
-the counter. It updates as soon as a setting changes, and it reports what is
-actually being used — not what was requested.
-
-Under PyInstaller, `nvidia-smi` only queries the driver: it ignores
-`CUDA_VISIBLE_DEVICES`, which is a Linux convention. To verify the CPU branch
-on a machine that does have a card, the installer exposes `--sans-gpu`.
-
-### AMD is not supported
-
-A deliberate choice: **a single executable, built with CUDA**. A CPU-only
-torch wheel weighs ~200 MB against ~3 GB for CUDA; shipping both would double
-the size of the `dist/` folder for a use case that is not ours (an AMD card in
-2026 is rare on the demonstration-camera market this targets). The program
-therefore runs on AMD in CPU mode, at ~7 img/s — usable for a short video, not
-for a whole demonstration.
-
-### If the GPU is not being used
-
-The application reports it in the status bar and in the console, and analyses
-anyway on the CPU, very slowly.
-
-Under PyInstaller, two traps were handled explicitly (see
-`crowd-counter-v2.spec` and `hooks-v2/hook-torchvision.py`):
-
-- torchvision's NMS extension is called `_C.stable` since 0.29 and is not a
-  Python module: without a dedicated hook, inference stops on `Couldn't load
-  custom C++ ops`;
-- CUDA DLLs are loaded by `torch.ops.load_library()`, never by an `import`:
-  PyInstaller does not find them on its own.
+AMD cards run in CPU mode — a deliberate trade-off. The full story (device
+choice in the app, why the first launch downloads ~2.4 GB of CUDA, the
+PyInstaller packaging traps) is in
+[`docs/BUILDING.md`](docs/BUILDING.md#performance-and-gpu).
 
 ## What the download looks like
 
@@ -241,124 +185,27 @@ Download it from the [releases page](../../releases).
 
 ## Building the executable
 
-**Build from a clean virtual environment.** This is not advice — it is the
-difference between a lean executable and a bloated one.
-
-Ultralytics imports its optional inference backends conditionally. If they are
-installed, PyInstaller bundles them: TensorRT (1.5 GB), TensorFlow (1.1 GB),
-ONNX Runtime (741 MB), xformers (413 MB) and bitsandbytes (213 MB). **None of
-them is used** — this project only ever runs PyTorch. Excluding them from the
-spec does not work: PyInstaller crashes while reading one of their hooks. The
-reliable approach is to make them unavailable in the first place — a virtual
-environment that never had them.
+The whole procedure lives in [`docs/BUILDING.md`](docs/BUILDING.md) — clean
+environment rule, exact pip commands (the torch wheel index matters), post-
+build verification. The shape of it:
 
 ```bash
-# 1. clean environment, nothing else in it
 python -m venv build-env
-
-# 2. torch CUDA + matching torchvision MUST come from the same index
-build-env\Scripts\python -m pip install torch==2.14.1+cu126 torchvision==0.29.1+cu126 ^
-    --index-url https://download.pytorch.org/whl/cu126
-
-# 3. the rest — from PyPI, never from the torch index
-build-env\Scripts\python -m pip install ultralytics opencv-python PySide6 pyinstaller pytest
-
-# 4. build — note the workpath
 build-env\Scripts\python -m PyInstaller --clean --workpath build/v2 crowd-counter-v2.spec
 build-env\Scripts\python tools/copier_modeles.py
 ```
 
-**torch and torchvision must come from the same index.** A CPU-only
-torchvision next to a CUDA torch crashes `torchvision::nms` on CUDA. This is
-the single most common packaging mistake here.
-
-Result: `dist/CompteurManifestationV2/` — ~290 MB without the weights
-(~360–400 MB with them). torch is NOT bundled; it is downloaded into
-`%LOCALAPPDATA%\CompteurManifestation\` on first launch. The `--workpath
-build/v2` keeps PyInstaller's intermediate `.toc` files in a workpath of their
-own — sharing it with other builds mixes stale state in.
-
-### Verify the build before shipping it
-
-```bash
-build-env\Scripts\python tools/verifier_lancement_exe.py
-```
-
-Launches the executable the way a user would, checks that a window titled
-*Compteur de manifestation* appears, that the weights are next to it, and that
-the console output does not contain the silent `Config` fallback. A build that
-succeeds does not prove that a double-click works — that is exactly what this
-tool covers.
-
-> If the folder is locked during a rebuild (`Device or resource busy`), the
-> executable from the previous build is still running. Close it first.
-
-### Why it cannot go below ~4 GB
-
-3.8 GB of the 4.3 GB are torch's CUDA DLLs — `torch_cuda.dll` alone is 1 GB,
-cuBLAS 500 MB, cuDNN over 1 GB. As long as CUDA ships inside the executable,
-that is the floor. Going lower means not shipping torch at all and downloading
-it on first launch; see `HISTOIRE.md`.
+Read the doc before building: the clean-environment rule is not optional, and
+a polluted build environment is the difference between a lean executable and
+a bloated one.
 
 ## Using the software
 
-1. **Load the video** — *Charger la vidéo* button.
-2. **Draw the line** — *Tracer la ligne* button, then two clicks on the image,
-   at the top and bottom of the line you care about. Drawing is "armed": a
-   stray click outside that gesture is ignored. The detection band follows the
-   line wherever you put it.
-3. **Set the direction** — in *Ligne de franchissement*, choose the counted
-   direction. The green arrow shows the active direction. **If the count stays
-   at zero after a few seconds, this is almost always why** — the software
-   shows a reminder rather than failing silently.
-4. **Adjust the sensitivity** — the parameter that matters most is *Frames de
-   confirmation*: 1 counts immediately (sensitive to false positives), 5 only
-   validates a person seen over several consecutive frames. Every parameter has
-   a tooltip explaining what it does and which value suits this scene; the
-   panel's *Afficher l'aide* button shows them all at once.
-5. **Run** — the counter updates continuously, the line flashes on every
-   crossing. The band and the line cannot be moved once the run starts.
-6. **Read the summary** — when the analysis stops, a section appears between
-   the status bar and the settings: total, duration, average rate, peak rate
-   and a curve of people per minute.
-
-### The end-of-analysis summary
-
-The summary reports only what was measured:
-
-- **Total** — people counted in the chosen direction.
-- **Average rate** — total over the analysed duration.
-- **Peak rate** — the busiest 60 s window, with when it happened. On analyses
-  shorter than a minute the window shrinks, and the figure is reported as
-  `12 pers / 40 s` rather than extrapolated to a rate that was never measured.
-
-There is **no automatic error rate**. There is no ground truth without manual
-annotation, and the software does not invent one. The only way to know how far
-a total is from the truth is to count a segment by hand and compare.
-
-### Audit mode
-
-During a replay, the *Audit* panel lets you flag errors by eye. The error rate
-shown is only valid for the portion you actually checked: it is a
-**measurement**, not an automatic estimate.
-
-### Reading the green boxes
-
-When a person is counted, their box turns **green** andis **filled**, hiding
-the counted head. The green box **follows the person** as they walk away,
-and disappears the moment they leave the detection band on the far side of the
-line — a clean exit, no lingering frame.
-
-This is not decoration — **it is the only way to see a mistake without ground
-truth.** Nobody can recount a demonstration by hand, and the counter will never
-say "I missed one": the total is just a number, and a wrong number looks exactly
-like a right one. But a person walking across the line *without* their box
-turning green is a visible miss. Twenty seconds of watching tells you whether
-the count can be trusted, and nothing else on screen tells you that.
-
-So when you check a result, don't only read the total. Watch the line for a
-while and count the green boxes yourself. If a head crosses and stays amber, you
-have found a miss — and you know roughly how far off the number is.
+Load a video, draw the line (two clicks), pick the counted direction, run.
+The full walkthrough — the direction reminder when the count stays at zero,
+the sensitivity settings, the end-of-analysis summary, audit mode, and how to
+read the green boxes that make a mistake visible — is in
+[`docs/USAGE.md`](docs/USAGE.md).
 
 ## Design decisions and scope
 
@@ -547,6 +394,10 @@ before pushing.
 
 ## Further reading
 
+- [`docs/BUILDING.md`](docs/BUILDING.md) — rebuilding the Windows executable,
+  and everything about GPU / CUDA performance.
+- [`docs/USAGE.md`](docs/USAGE.md) — day-to-day use: line, direction,
+  sensitivity, summary, audit mode, green boxes.
 - [`docs/design/DESIGN.md`](docs/design/DESIGN.md) — the original design
   specification: use case, algorithm, engine contract, settings rationale.
 - [`docs/design/IMPLEMENTATION-PLAN.md`](docs/design/IMPLEMENTATION-PLAN.md) —
