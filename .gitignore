@@ -2,6 +2,10 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+# Environnement de tests TEMPORAIRE : rien du projet dedans, que des
+# bibliothèques téléchargeables. Recréé à la demande, SUPPRIMABLE sans
+# précaution quand on n'en a plus besoin.
+venv-temp/
 
 # Modèles : trop lourds pour git (50 Mo)
 *.pt

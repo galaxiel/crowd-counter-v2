@@ -1195,7 +1195,14 @@ class FenetrePrincipale(QMainWindow):
             self._afficher_bilan()
             return
 
-        resultats = self.compteur.traiter_lot(lot)
+        # Repli : un compteur de test n'a pas forcément `traiter_lot` — même
+        # logique que le repli côté détecteur dans `Compteur.traiter_lot`.
+        if hasattr(self.compteur, "traiter_lot"):
+            resultats = self.compteur.traiter_lot(lot)
+        else:
+            resultats = [
+                self.compteur.traiter_frame(img, index, ts) for img, index, ts in lot
+            ]
         self._resultat_courant = resultats[-1]
 
     def _afficher(self) -> None:
@@ -1279,6 +1286,13 @@ class FenetrePrincipale(QMainWindow):
             for ev in historique[self._dernier_evenement_affiche :]:
                 if ev.track_id is not None:
                     self._boites_comptees.append((ev.frame, ev.track_id))
+            if len(historique) > self._dernier_evenement_affiche:
+                # Un ou plusieurs comptes NOUVEAUX viennent d'être rattrapés :
+                # le flash s'arme même si la frame affichée n'en porte aucun.
+                # En analyse par lot, un compte tombe souvent sur une frame
+                # intermédiaire jamais affichée — sans cet armement ici, le
+                # flash ne s'allumerait plus du tout.
+                self._flash = FLASH_FRAMES
             self._dernier_evenement_affiche = len(historique)
         else:
             # Pas de compteur (test, ou fenêtre construite seule) : on retombe

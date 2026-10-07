@@ -39,8 +39,13 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
 
+from compteur.compteur import TAILLE_LOT_DETECTION  # noqa: E402
 from compteur.types import Evenement, FrameResult, Track  # noqa: E402
-from interface.app import AVERTISSEMENT_SENS, FenetrePrincipale  # noqa: E402
+from interface.app import (
+    AVERTISSEMENT_SENS,
+    CADENCE_AFFICHAGE_IPS,
+    FenetrePrincipale,
+)  # noqa: E402
 from interface.overlay import dessiner  # noqa: E402
 
 # Cadence de la vidéo synthétique : 25 i/s. Les tests d'affichage en dépendent
@@ -450,20 +455,26 @@ def test_compteur_affiche_les_chiffres_en_entier(application, fenetre):
 # -- Boucle de lecture ----------------------------------------------------
 
 
-def test_tick_traite_une_frame_et_incremente_le_compteur(
+def test_tick_traite_un_lot_et_incremente_le_compteur(
     application, fenetre, video_synthetique
 ):
+    """Un tick = un LOT de `TAILLE_LOT_DETECTION` frames, comptage séquentiel.
+
+    La détection est groupée (un appel modèle par lot) ; l'affichage, lui,
+    montre la dernière frame du lot. La vidéo de 5 frames fait donc deux
+    lots : 4 frames, puis 1.
+    """
     f = fenetre
     f.charger_video(str(video_synthetique))
     f.compteur = FauxCompteur()
     f._ouvrir_session()
     avancer(f, 1)
-    assert f.compteur.appels == 1
-    assert f.frames == 1
-    assert f.compteur_total == 1
+    assert f.compteur.appels == TAILLE_LOT_DETECTION
+    assert f.frames == TAILLE_LOT_DETECTION
+    assert f.compteur_total == TAILLE_LOT_DETECTION
     avancer(f, 2)
-    assert f.compteur.appels == 3
-    assert f.compteur_total == 3
+    assert f.compteur.appels == 5  # la vidéo entière : 4 + 1
+    assert f.compteur_total == 5
 
 
 def test_tick_ne_traite_pas_si_pas_de_video(application, fenetre):
@@ -490,15 +501,32 @@ def test_fin_de_video_met_en_pause_et_affiche_le_bilan(
     assert "Terminé" in f.label_statut.text()
 
 
-def test_flash_de_comptage_s_allume_puis_s_eteint(application, fenetre, video_synthetique):
-    """Le flash d'alerte aide l'opérateur à voir le groupe qui passe."""
+def test_flash_de_comptage_s_allume_puis_s_eteint(application, fenetre, tmp_path):
+    """Le flash d'alerte aide l'opérateur à voir le groupe qui passe.
+
+    L'événement tombe en frame 2 : avec l'analyse par LOT, cette frame n'est
+    jamais AFFICHÉE (le lot 0-3 est représenté par la frame 3). Le flash doit
+    s'armer au rattrapage de l'événement depuis l'historique — sinon il ne
+    s'allumerait plus jamais en analyse par lot — puis s'éteindre après
+    `FLASH_FRAMES` affichages. Une vidéo de 20 frames laisse la place de
+    regarder le flash s'éteindre.
+    """
+    chemin = tmp_path / "flash.mp4"
+    auteur = cv2.VideoWriter(
+        str(chemin), cv2.VideoWriter_fourcc(*"mp4v"), FPS_SYNTHETIQUE, (64, 48)
+    )
+    assert auteur.isOpened(), "OpenCV n'a pas pu écrire la vidéo de test"
+    for i in range(20):
+        auteur.write(np.full((48, 64, 3), 20 + (i % 10) * 10, dtype=np.uint8))
+    auteur.release()
+
     f = fenetre
-    f.charger_video(str(video_synthetique))
+    f.charger_video(str(chemin))
     f.compteur = FauxCompteur()
     f._ouvrir_session()
-    avancer(f, 3)  # l'événement arrive en frame 2 -> flash armé
+    avancer(f, 1)  # le lot couvre les frames 0-3 : l'événement est rattrapé
     assert f._flash > 0
-    avancer(f, 6)
+    avancer(f, 6)  # six affichages plus tard : le flash est éteint
     assert f._flash == 0
 
 
@@ -535,19 +563,23 @@ def test_fermer_la_fenetre_libere_la_video(application, fenetre, video_synthetiq
 # -- Vitesse de présentation : retirée, l'analyse va à vitesse maximale -----
 
 
-def test_le_traitement_et_l_affichage_vont_a_vitesse_max(application, fenetre, video_synthetique):
-    """Le sélecteur de vitesse a été retiré : l'analyse fonce, toujours.
+def test_traitement_a_vitesse_max_et_affichage_plafonne(
+    application, fenetre, video_synthetique
+):
+    """Le traitement fonce ; l'affichage est plafonné à ~15 i/s.
 
-    Le réglage ne contrôlait que la fréquence de rafraîchissement, pas la
-    vitesse réelle (plafonnée par le traitement), et son effet était
-    contre-intuitif — 0,25× semblait plus rapide que ×4. Retiré, les deux
-    minuteries restent à 0 : le traitement ET l'affichage sont aussi rapides
-    que la machine le permet.
+    Le sélecteur de vitesse a été retiré : il ne contrôlait que la fréquence
+    de rafraîchissement, pas la vitesse réelle (plafonnée par le traitement),
+    et son effet était contre-intuitif — 0,25× semblait plus rapide que ×4.
+    Depuis l'analyse par lot, le rendu d'affichage est en outre le poste lourd
+    côté CPU sur le même thread que le traitement : le plafonner à
+    `CADENCE_AFFICHAGE_IPS` libère le débit de comptage, qui reste à
+    intervalle 0.
     """
     f = fenetre
     f.charger_video(str(video_synthetique))
     assert f._timer_traitement.interval() == 0
-    assert f._timer_affichage.interval() == 0
+    assert f._timer_affichage.interval() == 1000 // CADENCE_AFFICHAGE_IPS
 
 
 def test_affichage_ne_redessine_pas_la_meme_frame_deux_fois(
@@ -568,11 +600,13 @@ def test_affichage_ne_redessine_pas_la_meme_frame_deux_fois(
     for _ in range(3):
         f._tick()
         f._afficher()
-    assert len(vues) == 3
-    assert vues == [1, 2, 3]
+    # Un tick affiche la DERNIÈRE frame de son lot : lot de 4 (frames 0-3),
+    # puis la frame 4. Le troisième tick tombe sur une vidéo épuisée et
+    # n'affiche rien de neuf — pas de doublon pour autant.
+    assert vues == [TAILLE_LOT_DETECTION, 5]
     # Un appel d'affichage supplémentaire sans frame neuve ne redessine rien.
     f._afficher()
-    assert len(vues) == 3
+    assert len(vues) == 2
 
 
 # -- Réglages -------------------------------------------------------------
@@ -715,9 +749,14 @@ def avertissement_visible(fenetre):
 
 
 class FauxDetecteurMinimal:
-    """Détecteur sans poids : `lancer` n'a besoin que de l'instancier."""
+    """Détecteur sans poids : `lancer` n'a besoin que de l'instancier.
 
-    def __init__(self, modele, config) -> None:
+    La signature suit celle du vrai `Detecteur` (d'où le `half`, ajouté avec
+    la demi-précision CUDA) : un kwarg inattendu serait capté par le try de
+    `lancer` et l'analyse ne démarrerait jamais.
+    """
+
+    def __init__(self, modele, config, half: bool = False) -> None:
         self.config = config
 
 
@@ -760,7 +799,7 @@ def test_avertissement_sens_pas_avant_le_seuil_de_trois_secondes(
     f.charger_video(str(video_longue))
     f.compteur = CompteurInvisible()
     f._ouvrir_session()
-    avancer(f, 70)  # 2,8 s à 25 i/s
+    avancer(f, 18)  # 18 lots × 4 frames = 72 frames = 2,88 s à 25 i/s
     assert avertissement_visible(f) is False
 
 
@@ -772,7 +811,7 @@ def test_avertissement_sens_apparait_au_dela_de_trois_secondes(
     f.charger_video(str(video_longue))
     f.compteur = CompteurInvisible()
     f._ouvrir_session()
-    avancer(f, 80)  # 3,2 s à 25 i/s
+    avancer(f, 20)  # 20 lots × 4 frames = 80 frames = 3,2 s à 25 i/s
     assert avertissement_visible(f) is True
     assert f.label_avertissement.text() == AVERTISSEMENT_SENS
     assert "sens" in f.label_avertissement.text().lower()
@@ -791,7 +830,7 @@ def test_avertissement_sens_disparait_des_que_le_compteur_repart(
     f.charger_video(str(video_longue))
     f.compteur = CompteurInvisible()
     f._ouvrir_session()
-    avancer(f, 80)
+    avancer(f, 20)  # 80 frames = 3,2 s : le seuil est franchi
     assert avertissement_visible(f) is True
     f.maj_compteurs(total=1, presents=1, frames=81)
     assert avertissement_visible(f) is False
@@ -837,10 +876,10 @@ def test_avertissement_sens_ne_clignote_pas_a_haque_frame(
     f.compteur = CompteurInvisible()
     f._ouvrir_session()
     f.label_avertissement = LabelEspion(f.label_avertissement)
-    avancer(f, 80)
+    avancer(f, 20)  # 80 frames : le seuil (75) est franchi une fois
     écritures_au_declenchement = f.label_avertissement.écritures
     assert écritures_au_declenchement == 1
-    avancer(f, 10)
+    avancer(f, 10)  # 40 frames de plus : aucun nouveau setText
     assert f.label_avertissement.écritures == écritures_au_declenchement
     assert f.label_avertissement.text() == AVERTISSEMENT_SENS
     assert avertissement_visible(f) is True
@@ -872,7 +911,7 @@ def test_avertissement_sens_reapparait_a_la_relance(
     assert f._en_analyse is True
     assert f._avertissement_sens_affiche is False
 
-    avancer(f, 80)
+    avancer(f, 20)  # 80 frames = 3,2 s : le rappel se déclenche
     assert avertissement_visible(f) is True
 
     # L'opérateur corrige le sens et RELANCE : le rappel doit pouvoir se

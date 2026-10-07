@@ -37,7 +37,7 @@ from compteur.config import (  # noqa: E402
     mode_resolution,
     taille_entree_automatique,
 )
-from interface.app import FenetrePrincipale  # noqa: E402
+from interface.app import CADENCE_AFFICHAGE_IPS, FenetrePrincipale  # noqa: E402
 from interface.panneau_reglages import (  # noqa: E402
     AIDE,
     CHOIX_RESOLUTION_ANALYSE,
@@ -474,12 +474,13 @@ def test_le_selecteur_de_vitesse_a_ete_retire(application):
     Le sélecteur de vitesse de présentation a été retiré : il ne contrôlait
     que la fréquence de rafraîchissement, pas la vitesse réelle (plafonnée par
     le traitement), et son effet était contre-intuitif (0,25× semblait plus
-    rapide que ×4). L'analyse s'affiche désormais à vitesse max, sans réglage.
+    rapide que ×4). Le traitement reste à vitesse max ; l'affichage, lui, est
+    plafonné à `CADENCE_AFFICHAGE_IPS` — le rendu est le poste lourd du CPU,
+    sur le même thread que le traitement.
     """
     f = FenetrePrincipale()
     assert not hasattr(f, "choix_vitesse"), "le sélecteur de vitesse doit avoir disparu"
     assert not hasattr(f, "etiquette_vitesse")
     assert "vitesse_presentation" not in AIDE
-    # Les deux minuteries restent à 0 : le traitement et l'affichage foncent.
     assert f._timer_traitement.interval() == 0
-    assert f._timer_affichage.interval() == 0
+    assert f._timer_affichage.interval() == 1000 // CADENCE_AFFICHAGE_IPS
